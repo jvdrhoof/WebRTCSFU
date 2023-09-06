@@ -70,7 +70,7 @@ func main() {
 	// Read index.html from disk into memory, serve whenever anyone requests /
 	indexHTML, err := ioutil.ReadFile("index.html")
 	if err != nil {
-		panic(err)
+		indexHTML = []byte("<p>Nothing to see here, please pass along</p>")
 	}
 	indexTemplate = template.Must(template.New("").Parse(string(indexHTML)))
 
@@ -93,12 +93,12 @@ func addTrack(t *webrtc.TrackRemote) *webrtc.TrackLocalStaticRTP {
 	listLock.Lock()
 	defer func() {
 		listLock.Unlock()
-		println("Calling signalPeerConnections from addTrack")
+		println("WebRTCSFU: addTrack: Calling signalPeerConnections")
 		signalPeerConnections()
 	}()
 
 	// Print ID and StreamID
-	println("ID's: ", t.ID(), t.StreamID())
+	println("WebRTCSFU: addTrack: t.ID: ", t.ID(), "t.StreamID: ", t.StreamID())
 
 	// Create a new TrackLocal with the same codec as our incoming
 	trackLocal, err := webrtc.NewTrackLocalStaticRTP(t.Codec().RTPCodecCapability, t.ID(), t.StreamID())
@@ -115,9 +115,11 @@ func removeTrack(t *webrtc.TrackLocalStaticRTP) {
 	listLock.Lock()
 	defer func() {
 		listLock.Unlock()
+		println("WebRTCSFU: removeTrack: Calling signalPeerConnections")
 		signalPeerConnections()
 	}()
 
+	println("WebRTCSFU: removeTrack: t.ID: " + t.ID())
 	delete(trackLocals, t.ID())
 }
 
@@ -152,7 +154,7 @@ func removeTrackforPeer(pcState peerConnectionState, trackID string) {
 // signalPeerConnections updates each PeerConnection so that it is getting all the expected media tracks
 func signalPeerConnections() {
 
-	println("Signal peer connections")
+	println("WebRTCSFU: signalPeerConnections")
 
 	listLock.Lock()
 	defer func() {
@@ -218,7 +220,7 @@ func signalPeerConnections() {
 				return true
 			}
 
-			println("Sending offer")
+			println("WebRTCSFU: attemptSync: Sending offer to ", i)
 
 			s := fmt.Sprintf("%d@%d@%s", 1, 2, string(payload))
 			wsLock.Lock()
@@ -238,12 +240,12 @@ func signalPeerConnections() {
 			}*/
 		}
 
-		println("Return from attemptSync")
+		println("WebRTCSFU: attemptSync: return")
 
 		return
 	}
 
-	println("Entering syncAttempt")
+	println("WebRTCSFU: signalPeerConnections: attempting sync")
 
 	for syncAttempt := 0; ; syncAttempt++ {
 		if syncAttempt == 1 { // Why try 25 times?
@@ -260,32 +262,32 @@ func signalPeerConnections() {
 		}
 	}
 
-	println("Return from signalPeerConnections")
+	println("WebRTCSFU: signalPeerConnections: return")
 }
 
 // Handle incoming websockets
 func websocketHandler(w http.ResponseWriter, r *http.Request) {
 
-	println("Websocket handler started")
+	println("WebRTCSFU: webSocketHandler: Websocket handler started")
 
 	// Upgrade HTTP request to Websocket
 	unsafeConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		println("upgrade:", err)
+		println("WebRTCSFU: webSocketHandler: upgrade error:", err)
 		return
 	}
 
-	println("Websocket handler upgraded")
+	println("WebRTCSFU: webSocketHandler: Websocket handler upgraded")
 
 	c := &threadSafeWriter{unsafeConn, sync.Mutex{}}
 
 	// When this frame returns close the Websocket
 	defer func() {
-		println("Closing a ThreadSafeWriter")
+		println("WebRTCSFU: webSocketHandler: Closing a ThreadSafeWriter")
 		c.Close()
 	}()
 
-	println("Creating a new peer connection")
+	println("WebRTCSFU: webSocketHandler: Creating a new peer connection")
 
 	mediaEngine := &webrtc.MediaEngine{}
 	interceptorRegistry := &interceptor.Registry{}
@@ -349,15 +351,15 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 
-	println("Peer connection created")
+	println("WebRTCSFU: webSocketHandler: Peer connection created")
 
 	// When this frame returns close the PeerConnection
 	defer func() {
-		println("Closing a peer connection")
+		println("WebRTCSFU: webSocketHandler: Closing a peer connection")
 		peerConnection.Close()
 	}()
 
-	println("Iterating over video tracks")
+	println("WebRTCSFU: webSocketHandler: Iterating over video tracks")
 
 	for i := 0; i < *numberOfTiles; i++ {
 		if _, err := peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo, webrtc.RTPTransceiverInit{
@@ -368,11 +370,11 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	println("Waiting for lock")
+	println("WebRTCSFU: webSocketHandler: Waiting for lock")
 
 	// Add our new PeerConnection to global list
 	listLock.Lock()
-	println("Appending!")
+	println("WebRTCSFU: webSocketHandler: Appending!")
 	var pcState = peerConnectionState{peerConnection, c, pcID}
 	pcID += 1
 	peerConnections = append(peerConnections, pcState)
@@ -384,7 +386,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		if i == nil {
 			return
 		}
-		println("Found a candidate")
+		println("WebRTCSFU: webSocketHandler: OnICECandidate: Found a candidate")
 		payload := []byte(i.ToJSON().Candidate)
 		s := fmt.Sprintf("%d@%d@%s", 1, 4, string(payload))
 		wsLock.Lock()
@@ -397,7 +399,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 
 	// If PeerConnection is closed remove it from global list
 	peerConnection.OnConnectionStateChange(func(p webrtc.PeerConnectionState) {
-		fmt.Printf("Peer connection state has changed: %s\n", p.String())
+		fmt.Printf("WebRTCSFU: webSocketHandler: OnConnectionStateChange: Peer connection state has changed: %s\n", p.String())
 		switch p {
 		case webrtc.PeerConnectionStateFailed:
 			if err := peerConnection.Close(); err != nil {
@@ -406,7 +408,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		case webrtc.PeerConnectionStateClosed:
 			signalPeerConnections()
 		case webrtc.PeerConnectionStateConnected:
-			println("Connected!")
+			println("WebRTCSFU: webSocketHandler: OnConnectionStateChange: Connected!")
 			/*for ; true; <-time.NewTicker(1000 * time.Millisecond).C {
 				// TODO: extract bitrate here
 				// targetBitrate := uint32(0)
@@ -433,7 +435,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 
-	println("Will now call signalpeerconnections again")
+	println("WebRTCSFU: webSocketHandler: Will now call signalpeerconnections again")
 
 	// Signal for the new PeerConnection
 	signalPeerConnections()
@@ -446,7 +448,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		v := strings.Split(string(raw), "@")
 		messageType, _ := strconv.ParseUint(v[1], 10, 64)
 		message := v[2]
-		println("Message type: ", messageType)
+		println("WebRTCSFU: webSocketHandler: Message type: ", messageType)
 		switch messageType {
 		// answer
 		case 3:
