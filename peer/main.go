@@ -530,13 +530,16 @@ func (p *PointCloudPayloader) Payload(mtu uint16, payload []byte) (payloads [][]
 		if payloadRemaining < currentFragmentSize {
 			currentFragmentSize = payloadRemaining
 		}
-		p := NewFramePacket(p.frameCounter, p.tile, payloadLen, payloadDataOffset, currentFragmentSize, payload)
-		buf := new(bytes.Buffer)
 
-		if err := binary.Write(buf, binary.LittleEndian, p); err != nil {
-			panic(err)
-		}
-		payloads = append(payloads, buf.Bytes())
+		buf := make([]byte, currentFragmentSize+20)
+		binary.LittleEndian.PutUint32(buf[0:], p.frameCounter)
+		binary.LittleEndian.PutUint32(buf[4:], p.tile)
+		binary.LittleEndian.PutUint32(buf[8:], payloadLen)
+		binary.LittleEndian.PutUint32(buf[12:], payloadDataOffset)
+		binary.LittleEndian.PutUint32(buf[16:], currentFragmentSize)
+		copy(buf[20:], payload[payloadDataOffset:(payloadDataOffset+currentFragmentSize)])
+		payloads = append(payloads, buf)
+
 		payloadDataOffset += currentFragmentSize
 		payloadRemaining -= currentFragmentSize
 	}
