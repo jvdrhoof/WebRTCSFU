@@ -19,7 +19,7 @@ func ReadBinaryFiles(contentDirectory string) ([]FileData, error) {
 	for _, f := range files {
 		data, err := os.ReadFile(contentDirectory + "/" + f.Name())
 		if err != nil {
-			log.Printf("Failed to read file %s", f.Name())
+			println("WebRTCPeer: Failed to read file %s", f.Name())
 			return nil, err
 		}
 

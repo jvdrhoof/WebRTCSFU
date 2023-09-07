@@ -44,7 +44,7 @@ func (w *WebsocketHandler) StartListening(cb WebsocketCallback) {
 			clientID, _ := strconv.ParseUint(v[0], 10, 64)
 			messageType, _ := strconv.ParseUint(v[1], 10, 64)
 			wsPacket := WebsocketPacket{clientID, messageType, v[2]}
-			println("Message: ", clientID, messageType)
+			println("WebRTCPeer: Message from client", clientID, "and message type", messageType)
 			cb(wsPacket)
 		}
 	}()

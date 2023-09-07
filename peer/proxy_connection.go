@@ -70,7 +70,7 @@ func (pc *ProxyConnection) sendPacket(b []byte, offset uint32, packet_type uint3
 	pc.send_mutex.Unlock()
 
 	if err != nil {
-		fmt.Println("Error sending response:", err)
+		println("WebRTCPeer: Error sending response:", err)
 		panic(err)
 	}
 }
@@ -78,14 +78,14 @@ func (pc *ProxyConnection) sendPacket(b []byte, offset uint32, packet_type uint3
 func (pc *ProxyConnection) SetupConnection(port string, cb SetupCallback) {
 	address, err := net.ResolveUDPAddr("udp", port)
 	if err != nil {
-		fmt.Println("Error resolving address:", err)
+		println("WebRTCPeer: Error resolving address:", err)
 		return
 	}
 
 	// Create a UDP connection
 	pc.conn, err = net.ListenUDP("udp", address)
 	if err != nil {
-		fmt.Println("Error listening:", err)
+		println("WebRTCPeer: Error listening:", err)
 		return
 	}
 
@@ -93,25 +93,25 @@ func (pc *ProxyConnection) SetupConnection(port string, cb SetupCallback) {
 	buffer := make([]byte, 1500)
 
 	// Wait for incoming messages
-	fmt.Println("Waiting for a message...")
+	println("WebRTCPeer: Waiting for a message...")
 	_, pc.addr, err = pc.conn.ReadFromUDP(buffer)
 	if err != nil {
-		fmt.Println("Error reading:", err)
+		println("WebRTCPeer: Error reading:", err)
 		return
 	}
 
 	// Extract the number of tiles
 	numberOfTiles := int(buffer[0])
-	fmt.Printf("Starting WebRTC with %d tiles\n", numberOfTiles)
+	fmt.Printf("WebRTCPeer: Starting WebRTC with %d tiles\n", numberOfTiles)
 
 	// Call the callback
 	cb(numberOfTiles)
 
-	fmt.Println("Connected to proxy")
+	println("WebRTCPeer: Connected to Unity DLL")
 }
 
 func (pc *ProxyConnection) StartListening() {
-	println("Start listening")
+	println("WebRTCPeer: Start listening for incoming data from DLL")
 	go func() {
 		for {
 			buffer := make([]byte, 1500)
@@ -121,8 +121,7 @@ func (pc *ProxyConnection) StartListening() {
 			var p RemoteInputPacketHeader
 			err := binary.Read(bufBinary, binary.LittleEndian, &p)
 			if err != nil {
-				fmt.Println("Error:", err)
-				fmt.Println("QUITING")
+				fmt.Println("WebRTCPeer: Error:", err)
 				return
 			}
 
@@ -145,9 +144,10 @@ func (pc *ProxyConnection) StartListening() {
 			value.currentLen = value.currentLen + p.Packetlen
 			pc.incomplete_tiles[p.Tilenr][p.Framenr] = value
 			if value.currentLen == value.fileLen {
-				if p.Framenr%100 == 0 {
+				println("WebRTCPeer: DLL sent frame", p.Framenr, "from tile", p.Tilenr)
+				/* if p.Framenr%100 == 0 {
 					println("Received frame ", p.Framenr, " - tile ", p.Tilenr)
-				}
+				} */
 				_, exists := pc.complete_tiles[p.Tilenr]
 				if !exists {
 					pc.complete_tiles[p.Tilenr] = make([]RemoteTile, 0)
@@ -208,9 +208,6 @@ func (pc *ProxyConnection) NextFrame() []byte {
 	}
 	pc.m.Lock()
 	data := pc.complete_frames[0].frameData
-	if pc.frameCounter%100 == 0 {
-		println("SENDING FRAME ", pc.frameCounter)
-	}
 	pc.complete_frames = pc.complete_frames[1:]
 	pc.frameCounter = pc.frameCounter + 1
 	pc.m.Unlock()
@@ -233,9 +230,10 @@ func (pc *ProxyConnection) NextTile(tile uint32) []byte {
 	}
 	pc.m.Lock()
 	data := pc.complete_tiles[tile][0].fileData
-	if pc.frame_counters[tile]%100 == 0 {
-		println("Sending frame", pc.frame_counters[tile], "- tile", tile)
-	}
+	println("WebRTCPeer: Received frame", pc.frame_counters[tile], "from tile", tile)
+	/* if pc.frame_counters[tile]%100 == 0 {
+		println("WebRTC: frame", pc.frame_counters[tile], "- tile", tile)
+	} */
 	pc.complete_tiles[tile] = pc.complete_tiles[tile][1:]
 	pc.frame_counters[tile] += 1
 	pc.m.Unlock()
