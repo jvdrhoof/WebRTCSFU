@@ -10,23 +10,17 @@ import (
 )
 
 const (
-	FramePacketType   uint32 = 0
 	TilePacketType    uint32 = 1
 	ControlPacketType uint32 = 2
 )
 
 type RemoteInputPacketHeader struct {
-	Framenr     uint32
-	Tilenr      uint32
-	Tilelen     uint32
-	Frameoffset uint32
-	Packetlen   uint32
-}
-
-type RemoteFrame struct {
-	currentLen uint32
-	frameLen   uint32
-	frameData  []byte
+	ClientNr    uint32
+	FrameNr     uint32
+	TileNr      uint32
+	TileLen     uint32
+	FrameOffset uint32
+	PacketLen   uint32
 }
 
 type RemoteTile struct {
@@ -36,56 +30,47 @@ type RemoteTile struct {
 }
 
 type ProxyConnection struct {
-	// General
-	addr *net.UDPAddr
-	conn *net.UDPConn
-
-	// Receiving
-	m                 sync.RWMutex
-	incomplete_frames map[uint32]RemoteFrame
-	complete_frames   []RemoteFrame
-	frameCounter      uint32
-
+	addr             *net.UDPAddr
+	conn             *net.UDPConn
+	m                sync.RWMutex
 	incomplete_tiles map[uint32]map[uint32]RemoteTile
 	complete_tiles   map[uint32][]RemoteTile
 	frame_counters   map[uint32]uint32
-
-	send_mutex sync.Mutex
+	send_mutex       sync.Mutex
 }
 
 type SetupCallback func(int)
 
 func NewProxyConnection() *ProxyConnection {
-	return &ProxyConnection{nil, nil, sync.RWMutex{}, make(map[uint32]RemoteFrame), make([]RemoteFrame, 0), 0,
-		make(map[uint32]map[uint32]RemoteTile), make(map[uint32][]RemoteTile), make(map[uint32]uint32), sync.Mutex{}}
+	return &ProxyConnection{nil, nil, sync.RWMutex{},
+		make(map[uint32]map[uint32]RemoteTile), make(map[uint32][]RemoteTile),
+		make(map[uint32]uint32), sync.Mutex{}}
 }
 
 func (pc *ProxyConnection) sendPacket(b []byte, offset uint32, packet_type uint32) {
 	buffProxy := make([]byte, 1300)
 	binary.LittleEndian.PutUint32(buffProxy[0:], packet_type)
 	copy(buffProxy[4:], b[offset:])
-
 	pc.send_mutex.Lock()
 	_, err := pc.conn.WriteToUDP(buffProxy, pc.addr)
 	pc.send_mutex.Unlock()
-
 	if err != nil {
-		println("WebRTCPeer: Error sending response:", err)
+		fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
 		panic(err)
 	}
 }
 
-func (pc *ProxyConnection) SetupConnection(port string, cb SetupCallback) {
+func (pc *ProxyConnection) SetupConnection(port string) {
 	address, err := net.ResolveUDPAddr("udp", port)
 	if err != nil {
-		println("WebRTCPeer: Error resolving address:", err)
+		fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
 		return
 	}
 
 	// Create a UDP connection
 	pc.conn, err = net.ListenUDP("udp", address)
 	if err != nil {
-		println("WebRTCPeer: Error listening:", err)
+		fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
 		return
 	}
 
@@ -93,21 +78,14 @@ func (pc *ProxyConnection) SetupConnection(port string, cb SetupCallback) {
 	buffer := make([]byte, 1500)
 
 	// Wait for incoming messages
-	println("WebRTCPeer: Waiting for a message...")
+	fmt.Println("WebRTCPeer: Waiting for a message...")
 	_, pc.addr, err = pc.conn.ReadFromUDP(buffer)
 	if err != nil {
-		println("WebRTCPeer: Error reading:", err)
+		fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
 		return
 	}
 
-	// Extract the number of tiles
-	numberOfTiles := int(buffer[0])
-	fmt.Printf("WebRTCPeer: Starting WebRTC with %d tiles\n", numberOfTiles)
-
-	// Call the callback
-	cb(numberOfTiles)
-
-	println("WebRTCPeer: Connected to Unity DLL")
+	fmt.Println("WebRTCPeer: Connected to Unity DLL")
 }
 
 func (pc *ProxyConnection) StartListening() {
@@ -116,76 +94,45 @@ func (pc *ProxyConnection) StartListening() {
 		for {
 			buffer := make([]byte, 1500)
 			_, _, _ = pc.conn.ReadFromUDP(buffer)
-			bufBinary := bytes.NewBuffer(buffer[4:24])
-			// Read the fields from the buffer into a struct
+			bufBinary := bytes.NewBuffer(buffer[4:28])
 			var p RemoteInputPacketHeader
 			err := binary.Read(bufBinary, binary.LittleEndian, &p)
 			if err != nil {
-				fmt.Println("WebRTCPeer: Error:", err)
+				fmt.Printf("WebRTCPeer: Error: %s\n", err)
 				return
 			}
 
 			pc.m.Lock()
-			_, exists := pc.incomplete_tiles[p.Tilenr]
+			_, exists := pc.incomplete_tiles[p.TileNr]
 			if !exists {
-				pc.incomplete_tiles[p.Tilenr] = make(map[uint32]RemoteTile)
+				pc.incomplete_tiles[p.TileNr] = make(map[uint32]RemoteTile)
 			}
-			_, exists = pc.incomplete_tiles[p.Tilenr][p.Framenr]
+			_, exists = pc.incomplete_tiles[p.TileNr][p.FrameNr]
 			if !exists {
 				r := RemoteTile{
 					0,
-					p.Tilelen,
-					make([]byte, p.Tilelen),
+					p.TileLen,
+					make([]byte, p.TileLen),
 				}
-				pc.incomplete_tiles[p.Tilenr][p.Framenr] = r
+				pc.incomplete_tiles[p.TileNr][p.FrameNr] = r
 			}
-			value := pc.incomplete_tiles[p.Tilenr][p.Framenr]
-			copy(value.fileData[p.Frameoffset:p.Frameoffset+p.Packetlen], buffer[24:24+p.Packetlen])
-			value.currentLen = value.currentLen + p.Packetlen
-			pc.incomplete_tiles[p.Tilenr][p.Framenr] = value
+			value := pc.incomplete_tiles[p.TileNr][p.FrameNr]
+			copy(value.fileData[p.FrameOffset:p.FrameOffset+p.PacketLen], buffer[28:28+p.PacketLen])
+			value.currentLen = value.currentLen + p.PacketLen
+			pc.incomplete_tiles[p.TileNr][p.FrameNr] = value
 			if value.currentLen == value.fileLen {
-				println("WebRTCPeer: DLL sent frame", p.Framenr, "from tile", p.Tilenr)
-				/* if p.Framenr%100 == 0 {
-					println("Received frame ", p.Framenr, " - tile ", p.Tilenr)
-				} */
-				_, exists := pc.complete_tiles[p.Tilenr]
+				fmt.Printf("WebRTCPeer: DLL sent frame %d from tile %d with length %d\n",
+					p.FrameNr, p.TileNr, p.TileLen)
+				_, exists := pc.complete_tiles[p.TileNr]
 				if !exists {
-					pc.complete_tiles[p.Tilenr] = make([]RemoteTile, 0)
+					pc.complete_tiles[p.TileNr] = make([]RemoteTile, 0)
 				}
-				pc.complete_tiles[p.Tilenr] = append(pc.complete_tiles[p.Tilenr], value)
-				delete(pc.incomplete_tiles[p.Tilenr], p.Framenr)
+				pc.complete_tiles[p.TileNr] = append(pc.complete_tiles[p.TileNr], value)
+				delete(pc.incomplete_tiles[p.TileNr], p.FrameNr)
 			}
 			pc.m.Unlock()
 		}
 	}()
-}
-
-/*
-_, exists := pc.incomplete_frames[p.Framenr]
-	if !exists {
-		r := RemoteFrame{
-			0,
-			p.Tilelen,
-			make([]byte, p.Tilelen),
-		}
-		pc.incomplete_frames[p.Framenr] = r
-	}
-	value := pc.incomplete_frames[p.Framenr]
-
-	copy(value.frameData[p.Frameoffset:p.Frameoffset+p.Packetlen], buffer[24:24+p.Packetlen])
-	value.currentLen = value.currentLen + p.Packetlen
-	pc.incomplete_frames[p.Framenr] = value
-	if value.currentLen == value.frameLen {
-		if p.Framenr%100 == 0 {
-			println("FRAME ", p.Framenr, " RECEIVED FROM UNITY")
-		}
-		pc.complete_frames = append(pc.complete_frames, value)
-		delete(pc.incomplete_frames, p.Framenr)
-	}
-*/
-
-func (pc *ProxyConnection) SendFramePacket(b []byte, offset uint32) {
-	pc.sendPacket(b, offset, FramePacketType)
 }
 
 func (pc *ProxyConnection) SendTilePacket(b []byte, offset uint32) {
@@ -194,24 +141,6 @@ func (pc *ProxyConnection) SendTilePacket(b []byte, offset uint32) {
 
 func (pc *ProxyConnection) SendControlPacket(b []byte) {
 	pc.sendPacket(b, 0, ControlPacketType)
-}
-
-func (pc *ProxyConnection) NextFrame() []byte {
-	isNextFrameReady := false
-	for !isNextFrameReady {
-		pc.m.Lock()
-		if len(pc.complete_frames) > 0 {
-			isNextFrameReady = true
-		}
-		pc.m.Unlock()
-		time.Sleep(time.Millisecond)
-	}
-	pc.m.Lock()
-	data := pc.complete_frames[0].frameData
-	pc.complete_frames = pc.complete_frames[1:]
-	pc.frameCounter = pc.frameCounter + 1
-	pc.m.Unlock()
-	return data
 }
 
 func (pc *ProxyConnection) NextTile(tile uint32) []byte {
@@ -224,16 +153,14 @@ func (pc *ProxyConnection) NextTile(tile uint32) []byte {
 		}
 		if len(pc.complete_tiles[tile]) > 0 {
 			isNextFrameReady = true
+		} else {
+			pc.m.Unlock()
+			time.Sleep(time.Millisecond)
 		}
-		pc.m.Unlock()
-		time.Sleep(time.Millisecond)
 	}
-	pc.m.Lock()
 	data := pc.complete_tiles[tile][0].fileData
-	println("WebRTCPeer: Received frame", pc.frame_counters[tile], "from tile", tile)
-	/* if pc.frame_counters[tile]%100 == 0 {
-		println("WebRTC: frame", pc.frame_counters[tile], "- tile", tile)
-	} */
+	fmt.Printf("WebRTCPeer: Sending out frame %d from tile %d with size %d\n",
+		pc.frame_counters[tile], tile, pc.complete_tiles[tile][0].fileLen)
 	pc.complete_tiles[tile] = pc.complete_tiles[tile][1:]
 	pc.frame_counters[tile] += 1
 	pc.m.Unlock()

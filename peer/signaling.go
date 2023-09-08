@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net/url"
 	"strconv"
 	"strings"
@@ -28,7 +27,7 @@ func NewWSHandler(addr string, path string) *WebsocketHandler {
 	u := url.URL{Scheme: "ws", Host: addr, Path: path}
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
-		log.Fatal("Dial:", err)
+		fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
 	}
 	return &WebsocketHandler{conn, sync.RWMutex{}}
 }
@@ -44,7 +43,7 @@ func (w *WebsocketHandler) StartListening(cb WebsocketCallback) {
 			clientID, _ := strconv.ParseUint(v[0], 10, 64)
 			messageType, _ := strconv.ParseUint(v[1], 10, 64)
 			wsPacket := WebsocketPacket{clientID, messageType, v[2]}
-			println("WebRTCPeer: Message from client", clientID, "and message type", messageType)
+			fmt.Printf("WebRTCPeer: Message from client %d of type %d\n", clientID, messageType)
 			cb(wsPacket)
 		}
 	}()

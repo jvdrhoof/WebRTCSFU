@@ -1,6 +1,7 @@
 package main
 
 type FramePacket struct {
+	ClientNr  uint32
 	FrameNr   uint32
 	TileNr    uint32
 	TileLen   uint32
@@ -9,8 +10,9 @@ type FramePacket struct {
 	Data      [1148]byte
 }
 
-func NewFramePacket(frameNr, tileNr, tileLen, seqOffset, seqLen uint32, dataSubArray []byte) *FramePacket {
+func NewFramePacket(clientNr, frameNr, tileNr, tileLen, seqOffset, seqLen uint32, dataSubArray []byte) *FramePacket {
 	packet := &FramePacket{
+		ClientNr:  clientNr,
 		FrameNr:   frameNr,
 		TileNr:    tileNr,
 		TileLen:   tileLen,
