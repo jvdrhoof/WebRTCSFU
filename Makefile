@@ -1,5 +1,5 @@
 SFU_SRC=sfu/main.go
-PEER_SRC=peer/main.go peer/packet.go peer/proxy_connection.go peer/reader.go peer/signaling.go peer/transcoder.go
+PEER_SRC=peer/main.go peer/packet.go peer/proxy_connection.go peer/signaling.go peer/transcoder.go
 UNAME=$(shell uname)
 ifeq ($(UNAME), Darwin)
 ALL=sfu_mac.exe peer_mac.exe
