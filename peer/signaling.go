@@ -23,11 +23,13 @@ type WebsocketHandler struct {
 	writeLock sync.RWMutex
 }
 
-func NewWSHandler(addr string, path string) *WebsocketHandler {
+func NewWSHandler(addr, path string) *WebsocketHandler {
+	fmt.Printf("WebRTCPeer: NewWSHandler: addr %s, path %s\n", addr, path)
 	u := url.URL{Scheme: "ws", Host: addr, Path: path}
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
-		fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
+		fmt.Printf("WebRTCPeer: NewWSHandler: ERROR: %s\n", err)
+		panic(err)
 	}
 	return &WebsocketHandler{conn, sync.RWMutex{}}
 }
@@ -37,6 +39,7 @@ func (w *WebsocketHandler) StartListening(cb WebsocketCallback) {
 		for {
 			_, message, err := w.conn.ReadMessage()
 			if err != nil {
+				fmt.Printf("WebRTCPeer: StartListening: ERROR: %s\n", err)
 				panic(err)
 			}
 			v := strings.Split(string(message), "@")

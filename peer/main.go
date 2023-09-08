@@ -35,7 +35,7 @@ var proxyConn *ProxyConnection
 var clientID *int
 
 func main() {
-	sfuAddress := *flag.String("sfu", "localhost:8080", "SFU address")
+	sfuAddress := flag.String("sfu", "localhost:8080", "SFU address")
 	proxyPort := flag.String("p", ":0", "Port through which the DLL is connected")
 	useProxyInput := flag.Bool("i", false, "Receive content from the DLL to forward over WebRTC")
 	useProxyOutput := flag.Bool("o", false, "Forward content received over WebRTC to the DLL")
@@ -191,7 +191,7 @@ func main() {
 	estimator := <-estimatorChan
 
 	// Create custom websocket handler on SFU address
-	wsHandler := NewWSHandler(sfuAddress, "/websocket")
+	wsHandler := NewWSHandler(*sfuAddress, "/websocket")
 
 	peerConnection.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
