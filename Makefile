@@ -1,19 +1,19 @@
 SFU_SRC=sfu/main.go
 PEER_SRC=peer/main.go peer/packet.go peer/proxy_connection.go peer/signaling.go peer/transcoder.go
+
 UNAME=$(shell uname)
-ifeq ($(UNAME), Darwin)
-ALL=sfu_mac.exe peer_mac.exe
-endif
-ifeq ($(UNAME), Linux)
-ALL=sfu_linux.exe peer_linux.exe
-endif
+ARCH=$(shell arch)
+SFU_EXE=sfu-$(UNAME)-$(ARCH).exe
+PEER_EXE=peer-$(UNAME)-$(ARCH).exe
+ALL=$(SFU_EXE) $(PEER_EXE)
+
 # Need something for Windows, if we have Make there.
 
 all: $(ALL)
 	echo Built all for $(UNAME)
 
-sfu_mac.exe: $(SFU_SRC)
-	go build -o sfu_mac.exe ./sfu
+$(SFU_EXE): $(SFU_SRC)
+	go build -o $(SFU_EXE) ./sfu
 	
-peer_mac.exe: $(PEER_SRC)
-	go build -o peer_mac.exe ./peer
+$(PEER_EXE): $(PEER_SRC)
+	go build -o $(PEER_EXE) ./peer
