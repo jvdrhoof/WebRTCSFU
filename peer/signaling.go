@@ -40,7 +40,7 @@ func (w *WebsocketHandler) StartListening(cb WebsocketCallback) {
 			_, message, err := w.conn.ReadMessage()
 			if err != nil {
 				fmt.Printf("WebRTCPeer: StartListening: ERROR: %s\n", err)
-				panic(err)
+				break
 			}
 			v := strings.Split(string(message), "@")
 			clientID, _ := strconv.ParseUint(v[0], 10, 64)

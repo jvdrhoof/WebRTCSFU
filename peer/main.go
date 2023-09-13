@@ -246,7 +246,8 @@ func main() {
 		for {
 			_, _, readErr := track.Read(buf)
 			if readErr != nil {
-				panic(err)
+				fmt.Printf("WebRTCPeer: Can no longer read from track %s, terminating\n", track.ID())
+				break
 			}
 			if *useProxyOutput {
 				proxyConn.SendTilePacket(buf, 20)
