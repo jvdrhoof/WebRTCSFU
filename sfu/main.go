@@ -71,7 +71,7 @@ func main() {
 	// Read index.html from disk into memory, serve whenever anyone requests /
 	indexHTML, err := ioutil.ReadFile("index.html")
 	if err != nil {
-		indexHTML = []byte("<p>Nothing to see here, please pass along</p>")
+		indexHTML = []byte("<p>WebRTCSFU, Nothing to see here, please pass along</p>")
 	}
 	indexTemplate = template.Must(template.New("").Parse(string(indexHTML)))
 
@@ -216,7 +216,7 @@ func signalPeerConnections() {
 				return true
 			}
 
-			fmt.Printf("WebRTCSFU: attemptSync: Sending offer to %d\n", i)
+			fmt.Printf("WebRTCSFU: attemptSync: Sending offer to peerConnection #%d\n", i)
 
 			s := fmt.Sprintf("%d@%d@%s", 0, 2, string(payload))
 			wsLock.Lock()
@@ -264,7 +264,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("WebRTCSFU: webSocketHandler: Websocket handler started")
 
 	// Upgrade HTTP request to Websocket
-	unsafeConn, err := upgrader.Upgrade(w, r, nil)
+	unsafeWebSocketConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		fmt.Printf("WebRTCSFU: webSocketHandler: ERROR: %s\n", err)
 		return
@@ -272,12 +272,12 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("WebRTCSFU: webSocketHandler: Websocket handler upgraded")
 
-	c := &threadSafeWriter{unsafeConn, sync.Mutex{}}
+	webSocketConnection := &threadSafeWriter{unsafeWebSocketConn, sync.Mutex{}}
 
 	// When this frame returns close the Websocket
 	defer func() {
 		fmt.Println("WebRTCSFU: webSocketHandler: Closing a ThreadSafeWriter")
-		c.Close()
+		webSocketConnection.Close()
 	}()
 
 	fmt.Println("WebRTCSFU: webSocketHandler: Creating a new peer connection")
@@ -367,9 +367,10 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Add our new PeerConnection to global list
 	listLock.Lock()
-	var pcState = peerConnectionState{peerConnection, c, pcID}
+	var pcState = peerConnectionState{peerConnection, webSocketConnection, pcID}
 	pcID += 1
 	peerConnections = append(peerConnections, pcState)
+	fmt.Printf("WebRTCSFU: webSocketHandler: peerConnection #%d\n", len(peerConnections))
 	undesireableTracks[pcID] = []string{}
 	listLock.Unlock()
 
@@ -382,7 +383,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		payload := []byte(i.ToJSON().Candidate)
 		s := fmt.Sprintf("%d@%d@%s", 0, 4, string(payload))
 		wsLock.Lock()
-		err = c.WriteMessage(websocket.TextMessage, []byte(s))
+		err = webSocketConnection.WriteMessage(websocket.TextMessage, []byte(s))
 		wsLock.Unlock()
 		if err != nil {
 			panic(err)
@@ -408,17 +409,22 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	peerConnection.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		// Create a track to fan out our incoming video to all peers
 		trackLocal := addTrack(t)
-		defer removeTrack(trackLocal)
+		defer func() {
+			fmt.Printf("WebRTCSFU: OnTrack: removing track %w\n", trackLocal.ID)
+			removeTrack(trackLocal)
+		}()
 
 		buf := make([]byte, 1500)
 		for {
 			i, _, err := t.Read(buf)
 			if err != nil {
-				panic(err)
+				fmt.Printf("WebRTCSFU: OnTrack: error during read: %s\n", err)
+				break
 			}
 
 			if _, err = trackLocal.Write(buf[:i]); err != nil {
-				panic(err)
+				fmt.Printf("WebRTCSFU: OnTrack: error during write: %s\n", err)
+				break
 			}
 		}
 	})
@@ -429,9 +435,10 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	signalPeerConnections()
 
 	for {
-		_, raw, err := c.ReadMessage()
+		_, raw, err := webSocketConnection.ReadMessage()
 		if err != nil {
-			panic(err)
+			fmt.Printf("WebRTCSFU: webSocketHandler: ReadMessage: error %w\n", err)
+			break
 		}
 		v := strings.Split(string(raw), "@")
 		messageType, _ := strconv.ParseUint(v[1], 10, 64)
