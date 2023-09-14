@@ -32,7 +32,7 @@ type RemoteTile struct {
 type ProxyConnection struct {
 	addr             *net.UDPAddr
 	conn             *net.UDPConn
-	m                sync.RWMutex
+	m                PriorityLock
 	incomplete_tiles map[uint32]map[uint32]RemoteTile
 	complete_tiles   map[uint32][]RemoteTile
 	frame_counters   map[uint32]uint32
@@ -42,7 +42,7 @@ type ProxyConnection struct {
 type SetupCallback func(int)
 
 func NewProxyConnection() *ProxyConnection {
-	return &ProxyConnection{nil, nil, sync.RWMutex{},
+	return &ProxyConnection{nil, nil, NewPriorityPreferenceLock(),
 		make(map[uint32]map[uint32]RemoteTile), make(map[uint32][]RemoteTile),
 		make(map[uint32]uint32), sync.Mutex{}}
 }
@@ -146,7 +146,7 @@ func (pc *ProxyConnection) SendControlPacket(b []byte) {
 func (pc *ProxyConnection) NextTile(tile uint32) []byte {
 	isNextFrameReady := false
 	for !isNextFrameReady {
-		pc.m.Lock()
+		pc.m.HighPriorityLock()
 		_, exists := pc.complete_tiles[tile]
 		if !exists {
 			pc.complete_tiles[tile] = make([]RemoteTile, 0)
@@ -154,7 +154,7 @@ func (pc *ProxyConnection) NextTile(tile uint32) []byte {
 		if len(pc.complete_tiles[tile]) > 0 {
 			isNextFrameReady = true
 		} else {
-			pc.m.Unlock()
+			pc.m.HighPriorityUnlock()
 			time.Sleep(time.Millisecond)
 		}
 	}
@@ -163,6 +163,6 @@ func (pc *ProxyConnection) NextTile(tile uint32) []byte {
 		pc.frame_counters[tile], tile, pc.complete_tiles[tile][0].fileLen)
 	pc.complete_tiles[tile] = pc.complete_tiles[tile][1:]
 	pc.frame_counters[tile] += 1
-	pc.m.Unlock()
+	pc.m.HighPriorityUnlock()
 	return data
 }
