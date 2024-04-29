@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/pion/interceptor"
@@ -35,6 +36,11 @@ var proxyConn *ProxyConnection
 var clientID *int
 
 func main() {
+	// TODO: probably delete this once we swap to channels or condition variables
+	// Also currently this only works on windows so
+	winmmDLL := syscall.NewLazyDLL("winmm.dll")
+	procTimeBeginPeriod := winmmDLL.NewProc("timeBeginPeriod")
+	procTimeBeginPeriod.Call(uintptr(1))
 	sfuAddress := flag.String("sfu", "localhost:8080", "SFU address")
 	proxyPort := flag.String("p", ":0", "Port through which the DLL is connected")
 	useProxyInput := flag.Bool("i", false, "Receive content from the DLL to forward over WebRTC")
@@ -214,7 +220,7 @@ func main() {
 			fmt.Println("WebRTCPeer: Peer connection failed, exiting")
 			os.Exit(0)
 		} else if s == webrtc.PeerConnectionStateConnected {
-			for ; true; <-time.NewTicker(30 * time.Millisecond).C {
+			for {
 				targetBitrate := uint32(estimator.GetTargetBitrate())
 				transcoder.UpdateBitrate(targetBitrate)
 				for i := 0; i < *numberOfTiles; i++ {

@@ -24,6 +24,7 @@ type RemoteInputPacketHeader struct {
 }
 
 type RemoteTile struct {
+	frameNr    uint32
 	currentLen uint32
 	fileLen    uint32
 	fileData   []byte
@@ -110,6 +111,7 @@ func (pc *ProxyConnection) StartListening() {
 			_, exists = pc.incomplete_tiles[p.TileNr][p.FrameNr]
 			if !exists {
 				r := RemoteTile{
+					p.FrameNr,
 					0,
 					p.TileLen,
 					make([]byte, p.TileLen),
@@ -125,9 +127,11 @@ func (pc *ProxyConnection) StartListening() {
 					p.FrameNr, p.TileNr, p.TileLen)
 				_, exists := pc.complete_tiles[p.TileNr]
 				if !exists {
-					pc.complete_tiles[p.TileNr] = make([]RemoteTile, 0)
+					pc.complete_tiles[p.TileNr] = make([]RemoteTile, 1)
 				}
-				pc.complete_tiles[p.TileNr] = append(pc.complete_tiles[p.TileNr], value)
+				// For now we will only save 1 frame for each tile max (do we want to save more?)
+				// TODO use channels instead
+				pc.complete_tiles[p.TileNr][0] = value
 				delete(pc.incomplete_tiles[p.TileNr], p.FrameNr)
 			}
 			pc.m.Unlock()
@@ -147,10 +151,10 @@ func (pc *ProxyConnection) NextTile(tile uint32) []byte {
 	isNextFrameReady := false
 	for !isNextFrameReady {
 		pc.m.HighPriorityLock()
-		_, exists := pc.complete_tiles[tile]
-		if !exists {
-			pc.complete_tiles[tile] = make([]RemoteTile, 0)
-		}
+		//_, exists := pc.complete_tiles[tile]
+		//if !exists {
+		//	pc.complete_tiles[tile] = make([]RemoteTile, 0, 1)
+		//}
 		if len(pc.complete_tiles[tile]) > 0 {
 			isNextFrameReady = true
 		} else {
@@ -159,9 +163,11 @@ func (pc *ProxyConnection) NextTile(tile uint32) []byte {
 		}
 	}
 	data := pc.complete_tiles[tile][0].fileData
+	frameNr := pc.complete_tiles[tile][0].frameNr
 	fmt.Printf("WebRTCPeer: Sending out frame %d from tile %d with size %d\n",
-		pc.frame_counters[tile], tile, pc.complete_tiles[tile][0].fileLen)
-	pc.complete_tiles[tile] = pc.complete_tiles[tile][1:]
+		frameNr, tile, pc.complete_tiles[tile][0].fileLen)
+	delete(pc.complete_tiles, tile)
+	// Do we still need frame counter? Seems more logical to use the actual frame nr
 	pc.frame_counters[tile] += 1
 	pc.m.HighPriorityUnlock()
 	return data
