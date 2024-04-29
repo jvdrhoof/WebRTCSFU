@@ -224,6 +224,7 @@ func main() {
 				targetBitrate := uint32(estimator.GetTargetBitrate())
 				transcoder.UpdateBitrate(targetBitrate)
 				for i := 0; i < *numberOfTiles; i++ {
+					// TODO maybe change writeframe into goroutines?
 					if err = videoTracks[i].WriteFrame(transcoder, uint32(i)); err != nil {
 						panic(err)
 					}

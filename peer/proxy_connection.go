@@ -38,6 +38,12 @@ type ProxyConnection struct {
 	complete_tiles   map[uint32][]RemoteTile
 	frame_counters   map[uint32]uint32
 	send_mutex       sync.Mutex
+
+	// Cond gives better performance compared to high priority lock
+	// High prio lock => latency between 3 and 10ms
+	// Condi lock => latency between 0 and 1ms
+	cond *sync.Cond
+	mtx  sync.Mutex
 }
 
 type SetupCallback func(int)
@@ -45,7 +51,7 @@ type SetupCallback func(int)
 func NewProxyConnection() *ProxyConnection {
 	return &ProxyConnection{nil, nil, NewPriorityPreferenceLock(),
 		make(map[uint32]map[uint32]RemoteTile), make(map[uint32][]RemoteTile),
-		make(map[uint32]uint32), sync.Mutex{}}
+		make(map[uint32]uint32), sync.Mutex{}, nil, sync.Mutex{}}
 }
 
 func (pc *ProxyConnection) sendPacket(b []byte, offset uint32, packet_type uint32) {
@@ -91,6 +97,7 @@ func (pc *ProxyConnection) SetupConnection(port string) {
 
 func (pc *ProxyConnection) StartListening() {
 	println("WebRTCPeer: Start listening for incoming data from DLL")
+	pc.cond = sync.NewCond(&pc.mtx)
 	go func() {
 		for {
 			buffer := make([]byte, 1500)
@@ -102,8 +109,8 @@ func (pc *ProxyConnection) StartListening() {
 				fmt.Printf("WebRTCPeer: Error: %s\n", err)
 				return
 			}
-
-			pc.m.Lock()
+			pc.mtx.Lock()
+			//pc.m.Lock()
 			_, exists := pc.incomplete_tiles[p.TileNr]
 			if !exists {
 				pc.incomplete_tiles[p.TileNr] = make(map[uint32]RemoteTile)
@@ -117,14 +124,16 @@ func (pc *ProxyConnection) StartListening() {
 					make([]byte, p.TileLen),
 				}
 				pc.incomplete_tiles[p.TileNr][p.FrameNr] = r
+				fmt.Printf("WebRTCPeer: DLL first packet of frame %d from tile %d with length %d  at %d\n",
+					p.FrameNr, p.TileNr, p.TileLen, time.Now().UnixNano()/int64(time.Millisecond))
 			}
 			value := pc.incomplete_tiles[p.TileNr][p.FrameNr]
 			copy(value.fileData[p.FrameOffset:p.FrameOffset+p.PacketLen], buffer[28:28+p.PacketLen])
 			value.currentLen = value.currentLen + p.PacketLen
 			pc.incomplete_tiles[p.TileNr][p.FrameNr] = value
 			if value.currentLen == value.fileLen {
-				fmt.Printf("WebRTCPeer: DLL sent frame %d from tile %d with length %d\n",
-					p.FrameNr, p.TileNr, p.TileLen)
+				fmt.Printf("WebRTCPeer: DLL sent frame %d from tile %d with length %d  at %d\n",
+					p.FrameNr, p.TileNr, p.TileLen, time.Now().UnixNano()/int64(time.Millisecond))
 				_, exists := pc.complete_tiles[p.TileNr]
 				if !exists {
 					pc.complete_tiles[p.TileNr] = make([]RemoteTile, 1)
@@ -133,8 +142,10 @@ func (pc *ProxyConnection) StartListening() {
 				// TODO use channels instead
 				pc.complete_tiles[p.TileNr][0] = value
 				delete(pc.incomplete_tiles[p.TileNr], p.FrameNr)
+				pc.cond.Broadcast()
 			}
-			pc.m.Unlock()
+			pc.mtx.Unlock()
+			//pc.m.Unlock()
 		}
 	}()
 }
@@ -150,7 +161,8 @@ func (pc *ProxyConnection) SendControlPacket(b []byte) {
 func (pc *ProxyConnection) NextTile(tile uint32) []byte {
 	isNextFrameReady := false
 	for !isNextFrameReady {
-		pc.m.HighPriorityLock()
+		pc.mtx.Lock()
+		//pc.m.HighPriorityLock()
 		//_, exists := pc.complete_tiles[tile]
 		//if !exists {
 		//	pc.complete_tiles[tile] = make([]RemoteTile, 0, 1)
@@ -158,17 +170,20 @@ func (pc *ProxyConnection) NextTile(tile uint32) []byte {
 		if len(pc.complete_tiles[tile]) > 0 {
 			isNextFrameReady = true
 		} else {
-			pc.m.HighPriorityUnlock()
-			time.Sleep(time.Millisecond)
+			pc.cond.Wait()
+			isNextFrameReady = true
+			//pc.m.HighPriorityUnlock()
+			//time.Sleep(time.Millisecond)
 		}
 	}
 	data := pc.complete_tiles[tile][0].fileData
 	frameNr := pc.complete_tiles[tile][0].frameNr
-	fmt.Printf("WebRTCPeer: Sending out frame %d from tile %d with size %d\n",
-		frameNr, tile, pc.complete_tiles[tile][0].fileLen)
+	fmt.Printf("WebRTCPeer: Sending out frame %d from tile %d with size %d at %d\n",
+		frameNr, tile, pc.complete_tiles[tile][0].fileLen, time.Now().UnixNano()/int64(time.Millisecond))
 	delete(pc.complete_tiles, tile)
 	// Do we still need frame counter? Seems more logical to use the actual frame nr
 	pc.frame_counters[tile] += 1
-	pc.m.HighPriorityUnlock()
+	pc.mtx.Unlock()
+	//pc.m.HighPriorityUnlock()
 	return data
 }
