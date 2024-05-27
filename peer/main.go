@@ -82,6 +82,15 @@ func main() {
 		SDPFmtpLine:  "",
 		RTCPFeedback: videoRTCPFeedback,
 	}
+	// TODO: Which enable support for multiple audio codecs + custom ones
+	// TODO: also fix these settings although it probably doesnt matter that much
+	audioCodecCapability := webrtc.RTPCodecCapability{
+		MimeType:     "audio/pcm",
+		ClockRate:    90000,
+		Channels:     0,
+		SDPFmtpLine:  "",
+		RTCPFeedback: nil,
+	}
 
 	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: codecCapability,
@@ -90,6 +99,12 @@ func main() {
 		panic(err)
 	}
 
+	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: audioCodecCapability,
+		PayloadType:        6,
+	}, webrtc.RTPCodecTypeAudio); err != nil {
+		panic(err)
+	}
 	congestionController, err := cc.NewInterceptor(func() (cc.BandwidthEstimator, error) {
 		return gcc.NewSendSideBWE(gcc.SendSideBWEMinBitrate(75_000*8), gcc.SendSideBWEInitialBitrate(75_000_000), gcc.SendSideBWEMaxBitrate(262_744_320))
 	})
@@ -118,10 +133,10 @@ func main() {
 		panic(err)
 	}
 
-	m.RegisterFeedback(webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBTransportCC}, webrtc.RTPCodecTypeAudio)
-	if err := m.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: sdp.TransportCCURI}, webrtc.RTPCodecTypeAudio); err != nil {
-		panic(err)
-	}
+	//m.RegisterFeedback(webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBTransportCC}, webrtc.RTPCodecTypeAudio)
+	//if err := m.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: sdp.TransportCCURI}, webrtc.RTPCodecTypeAudio); err != nil {
+	//	panic(err)
+	//}
 
 	generator, err := twcc.NewSenderInterceptor(twcc.SendInterval(10 * time.Millisecond))
 	if err != nil {
@@ -145,6 +160,8 @@ func main() {
 		panic(err)
 	}
 
+	// TODO: probably remove this? This is the same as before but without feedback aka TWCC / NACK
+	//
 	codecCapability = webrtc.RTPCodecCapability{
 		MimeType:     "video/pcm",
 		ClockRate:    90000,
@@ -154,7 +171,11 @@ func main() {
 	}
 
 	videoTracks := map[int]*TrackLocalCloudRTP{}
-
+	// TODO: give audio custom id?
+	audioTrack, err := NewTrackLocalAudioRTP(audioCodecCapability, fmt.Sprintf("audio_%d", *clientID), fmt.Sprintf("%d", 99))
+	if err != nil {
+		panic(err)
+	}
 	for i := 0; i < *numberOfTiles; i++ {
 		videoTrack, err := NewTrackLocalCloudRTP(codecCapability, fmt.Sprintf("video_%d_%d", *clientID, i), fmt.Sprintf("%d", i))
 		if err != nil {
@@ -163,6 +184,9 @@ func main() {
 		videoTracks[i] = videoTrack
 	}
 
+	if _, err = peerConnection.AddTrack(audioTrack); err != nil {
+		panic(err)
+	}
 	for i := 0; i < *numberOfTiles; i++ {
 		if _, err = peerConnection.AddTrack(videoTracks[i]); err != nil {
 			panic(err)
@@ -214,10 +238,23 @@ func main() {
 			fmt.Println("WebRTCPeer: Peer connection failed, exiting")
 			os.Exit(0)
 		} else if s == webrtc.PeerConnectionStateConnected {
-			for ; true; <-time.NewTicker(30 * time.Millisecond).C {
+			// TODO Combine both write operations into one loop
+			// Idk if the underlying socket is thread safe or not but having is an extra thread is probably unwarrented anyway
+
+			go func() {
+				// Potentially combine audio frames into single packet?
+				// Would add small delay but might be more optimal?
+				// Atm audio frame is around 126 bytes so WebRTC overhead might be too much
+				for {
+					audioTrack.WriteAudioFrame(proxyConn.NextAudioFrame())
+				}
+
+			}()
+			for {
 				targetBitrate := uint32(estimator.GetTargetBitrate())
 				transcoder.UpdateBitrate(targetBitrate)
 				for i := 0; i < *numberOfTiles; i++ {
+					// TODO maybe change writeframe into goroutines?
 					if err = videoTracks[i].WriteFrame(transcoder, uint32(i)); err != nil {
 						panic(err)
 					}
@@ -229,9 +266,10 @@ func main() {
 	peerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		fmt.Printf("WebRTCPeer: MIME type %s\n", track.Codec().MimeType)
 		fmt.Printf("WebRTCPeer: Payload type %d\n", track.PayloadType())
-
+		fmt.Printf("WebRTCPeer: Track SSRC %d\n", track.SSRC())
 		// TODO: check the puprose of this code fragment
-		if track.ID()[len(track.ID())-1] == '1' {
+		// Currently this removes stuff like audio_1 (audio track second client) and video_X_1 (second tile for user X)?
+		if track.ID()[len(track.ID())-1] == '1' && track.Kind() == webrtc.RTPCodecTypeVideo {
 			wsHandler.SendMessage(WebsocketPacket{1, 5, track.ID()})
 		}
 
@@ -239,32 +277,60 @@ func main() {
 		fmt.Printf("WebRTCPeer: Track of type %d has started: %s\n", track.PayloadType(), codecName)
 
 		// Create buffer to receive incoming track data, using 1300 bytes - header bytes
+		// TODO is different for audio
 		buf := make([]byte, 1220)
 
 		// Allows to check if frames are received completely
 		frames := make(map[uint32]uint32)
+		// TODO: make clean seperated function for audio / video so we dont constantly need to do the kind check
 		for {
 			_, _, readErr := track.Read(buf)
 			if readErr != nil {
-				fmt.Printf("WebRTCPeer: Can no longer read from track %s, terminating\n", track.ID())
+				fmt.Printf("WebRTCPeer: Can no longer read from track %s, terminating %s\n", track.ID(), readErr.Error())
 				break
 			}
 			if *useProxyOutput {
-				proxyConn.SendTilePacket(buf, 20)
+				if track.Kind() == webrtc.RTPCodecTypeVideo {
+					proxyConn.SendTilePacket(buf, 20)
+				} else {
+					proxyConn.SendAudioPacket(buf, 20)
+				}
 			}
 			// Create a buffer from the byte array, skipping the first 20 WebRTC bytes
-			bufBinary := bytes.NewBuffer(buf[20:])
-			// Read the fields from the buffer into a struct
-			var p FramePacket
-			err := binary.Read(bufBinary, binary.LittleEndian, &p)
-			if err != nil {
-				panic(err)
+			if track.Kind() == webrtc.RTPCodecTypeVideo {
+
+				bufBinary := bytes.NewBuffer(buf[20:])
+
+				// Read the fields from the buffer into a struct
+				var p VideoFramePacket
+				err := binary.Read(bufBinary, binary.LittleEndian, &p)
+				if err != nil {
+					panic(err)
+				}
+
+				frames[p.FrameNr] += p.SeqLen
+				if frames[p.FrameNr] == p.FrameLen {
+					fmt.Printf("WebRTCPeer: [VIDEO] Received video frame %d from client %d and tile %d with length %d\n",
+						p.FrameNr, p.ClientNr, p.TileNr, p.FrameLen)
+				}
+
+			} else {
+				bufBinary := bytes.NewBuffer(buf[20:])
+
+				// Read the fields from the buffer into a struct
+				var p AudioFramePacket
+				err := binary.Read(bufBinary, binary.LittleEndian, &p)
+				if err != nil {
+					panic(err)
+				}
+				frames[p.FrameNr] += p.SeqLen
+				if frames[p.FrameNr] == p.FrameLen {
+					fmt.Printf("WebRTCPeer: [AUDIO] Received audio frame %d from client %d with length %d\n",
+						p.FrameNr, p.ClientNr, p.FrameLen)
+				}
+
 			}
-			frames[p.FrameNr] += p.SeqLen
-			if frames[p.FrameNr] == p.TileLen {
-				fmt.Printf("WebRTCPeer: Received frame %d from client %d and tile %d with length %d\n",
-					p.FrameNr, p.ClientNr, p.TileNr, p.TileLen)
-			}
+
 		}
 	})
 
@@ -386,6 +452,7 @@ func (s *TrackLocalCloudRTP) Bind(t webrtc.TrackLocalContext) (webrtc.RTPCodecPa
 	if err != nil {
 		panic(err)
 	}
+	println("Tile", ui64)
 	s.packetizer = rtp.NewPacketizer(
 		1200, // Not MTU but ok
 		0,    // Value is handled when writing
@@ -462,13 +529,16 @@ func (p *PointCloudPayloader) Payload(mtu uint16, payload []byte) (payloads [][]
 			currentFragmentSize = payloadRemaining
 		}
 		buf := make([]byte, currentFragmentSize+24)
+		//	binary.LittleEndian.PutUint32(buf[0:], TilePacketType)
 		binary.LittleEndian.PutUint32(buf[0:], uint32(*clientID))
 		binary.LittleEndian.PutUint32(buf[4:], p.frameCounter)
-		binary.LittleEndian.PutUint32(buf[8:], p.tile)
-		binary.LittleEndian.PutUint32(buf[12:], payloadLen)
-		binary.LittleEndian.PutUint32(buf[16:], payloadDataOffset)
-		binary.LittleEndian.PutUint32(buf[20:], currentFragmentSize)
+		binary.LittleEndian.PutUint32(buf[8:], payloadLen)
+		binary.LittleEndian.PutUint32(buf[12:], payloadDataOffset)
+		binary.LittleEndian.PutUint32(buf[16:], currentFragmentSize)
+		binary.LittleEndian.PutUint32(buf[20:], p.tile)
+
 		copy(buf[24:], payload[payloadDataOffset:(payloadDataOffset+currentFragmentSize)])
+
 		payloads = append(payloads, buf)
 		payloadDataOffset += currentFragmentSize
 		payloadRemaining -= currentFragmentSize
@@ -479,4 +549,132 @@ func (p *PointCloudPayloader) Payload(mtu uint16, payload []byte) (payloads [][]
 
 func NewPointCloudPayloader(tile uint32) *PointCloudPayloader {
 	return &PointCloudPayloader{0, tile}
+}
+
+// TrackLocalStaticRTP  is a TrackLocal that has a pre-set codec and accepts RTP Packets.
+// If you wish to send a media.Sample use TrackLocalStaticSample
+type TrackLocalAudioRTP struct {
+	packetizer rtp.Packetizer
+	sequencer  rtp.Sequencer
+	rtpTrack   *webrtc.TrackLocalStaticRTP
+	clockRate  float64
+}
+
+// NewTrackLocalStaticSample returns a TrackLocalStaticSample
+func NewTrackLocalAudioRTP(c webrtc.RTPCodecCapability, id, streamID string, options ...func(*webrtc.TrackLocalStaticRTP)) (*TrackLocalAudioRTP, error) {
+	rtpTrack, err := webrtc.NewTrackLocalStaticRTP(c, id, streamID, options...)
+	if err != nil {
+		return nil, err
+	}
+	return &TrackLocalAudioRTP{
+		rtpTrack: rtpTrack,
+	}, nil
+}
+
+// Bind is called by the PeerConnection after negotiation is complete
+// This asserts that the code requested is supported by the remote peer.
+// If so it setups all the state (SSRC and PayloadType) to have a call
+func (s *TrackLocalAudioRTP) Bind(t webrtc.TrackLocalContext) (webrtc.RTPCodecParameters, error) {
+	codec, err := s.rtpTrack.Bind(t)
+	if err != nil {
+		return codec, err
+	}
+	// We only need one packetizer
+	if s.packetizer != nil {
+		return codec, nil
+	}
+	s.sequencer = rtp.NewRandomSequencer()
+
+	s.packetizer = rtp.NewPacketizer(
+		1200, // Not MTU but ok
+		0,    // Value is handled when writing
+		0,    // Value is handled when writing
+		NewAudioPayloader(),
+		s.sequencer,
+		codec.ClockRate,
+	)
+	s.clockRate = float64(codec.RTPCodecCapability.ClockRate)
+	return codec, err
+}
+
+// Unbind implements the teardown logic when the track is no longer needed. This happens
+// because a track has been stopped.
+func (s *TrackLocalAudioRTP) Unbind(t webrtc.TrackLocalContext) error {
+	return s.rtpTrack.Unbind(t)
+}
+
+// ID is the unique identifier for this Track. This should be unique for the
+// stream, but doesn't have to globally unique. A common example would be 'audio' or 'video'
+// and StreamID would be 'desktop' or 'webcam'
+func (s *TrackLocalAudioRTP) ID() string { return s.rtpTrack.ID() }
+
+// StreamID is the group this track belongs too. This must be unique
+func (s *TrackLocalAudioRTP) StreamID() string { return s.rtpTrack.StreamID() }
+
+// RID is the RTP stream identifier
+func (s *TrackLocalAudioRTP) RID() string { return s.rtpTrack.RID() }
+
+// Kind controls if this TrackLocal is audio or video
+func (s *TrackLocalAudioRTP) Kind() webrtc.RTPCodecType { return s.rtpTrack.Kind() }
+
+// Codec gets the Codec of the track
+func (s *TrackLocalAudioRTP) Codec() webrtc.RTPCodecCapability {
+	return s.rtpTrack.Codec()
+}
+
+func (s *TrackLocalAudioRTP) WriteAudioFrame(audio []byte) error {
+	p := s.packetizer
+	clockRate := s.clockRate
+	if p == nil {
+		return nil
+	}
+	samples := uint32(1 * clockRate)
+
+	if audio != nil {
+		packets := p.Packetize(audio, samples)
+		counter := 0
+		for _, p := range packets {
+			if err := s.rtpTrack.WriteRTP(p); err != nil {
+				fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
+			}
+			counter += 1
+		}
+	}
+	return nil
+}
+
+// AV1Payloader payloads AV1 packets
+type AudioPayloader struct {
+	frameCounter uint32
+}
+
+// Payload fragments a AV1 packet across one or more byte arrays
+// See AudioPayloader for description of AV1 Payload Header
+func (p *AudioPayloader) Payload(mtu uint16, payload []byte) (payloads [][]byte) {
+	payloadDataOffset := uint32(0)
+	payloadLen := uint32(len(payload))
+	payloadRemaining := payloadLen
+	for payloadRemaining > 0 {
+		currentFragmentSize := uint32(1152)
+		if payloadRemaining < currentFragmentSize {
+			currentFragmentSize = payloadRemaining
+		}
+		buf := make([]byte, currentFragmentSize+20)
+		binary.LittleEndian.PutUint32(buf[0:], uint32(*clientID))
+		binary.LittleEndian.PutUint32(buf[4:], p.frameCounter)
+
+		binary.LittleEndian.PutUint32(buf[8:], payloadLen)
+		binary.LittleEndian.PutUint32(buf[12:], payloadDataOffset)
+		binary.LittleEndian.PutUint32(buf[16:], currentFragmentSize)
+		copy(buf[20:], payload[payloadDataOffset:(payloadDataOffset+currentFragmentSize)])
+		payloads = append(payloads, buf)
+		payloadDataOffset += currentFragmentSize
+		payloadRemaining -= currentFragmentSize
+	}
+	p.frameCounter++
+	return payloads
+}
+
+func NewAudioPayloader() *AudioPayloader {
+	return &AudioPayloader{}
 }

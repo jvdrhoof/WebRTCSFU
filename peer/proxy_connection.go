@@ -6,24 +6,40 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"time"
 )
 
 const (
 	TilePacketType    uint32 = 1
-	ControlPacketType uint32 = 2
+	ControlPacketType uint32 = 3
+	AudioPacketType   uint32 = 2
 )
 
+// TODO seperate this into different struct. We also want to use packet type for control packets (i.e. fov)
 type RemoteInputPacketHeader struct {
+}
+
+// TODO Refactor this
+type RemoteInputVideoPacketHeader struct {
 	ClientNr    uint32
 	FrameNr     uint32
+	FrameLen    uint32
+	FrameOffset uint32
+	PacketLen   uint32
 	TileNr      uint32
-	TileLen     uint32
+}
+
+type RemoteInputAudioPacketHeader struct {
+	// TODO: do we have special audio fields?
+	ClientNr    uint32
+	FrameNr     uint32
+	FrameLen    uint32
 	FrameOffset uint32
 	PacketLen   uint32
 }
 
+// TODO split audio and video? Technically can both use this struct
 type RemoteTile struct {
+	frameNr    uint32
 	currentLen uint32
 	fileLen    uint32
 	fileData   []byte
@@ -33,18 +49,36 @@ type ProxyConnection struct {
 	addr             *net.UDPAddr
 	conn             *net.UDPConn
 	m                PriorityLock
-	incomplete_tiles map[uint32]map[uint32]RemoteTile
-	complete_tiles   map[uint32][]RemoteTile
-	frame_counters   map[uint32]uint32
-	send_mutex       sync.Mutex
+	incomplete_tiles map[uint32]map[uint32]RemoteTile // We probably want to limit the max number of incomplete tiles?
+	//And maybe use something else than a simple map because atm there is technically a max frame limit
+	complete_tiles map[uint32][]RemoteTile
+
+	incomplete_audio_frames map[uint32]RemoteTile
+	complete_audio_frames   []RemoteTile
+
+	frame_counters map[uint32]uint32
+	send_mutex     sync.Mutex
+
+	// Cond gives better performance compared to high priority lock
+	// High prio lock => latency between 3 and 10ms
+	// Condi lock => latency between 0 and 1ms
+	cond_video *sync.Cond
+	mtx_video  sync.Mutex
+
+	cond_audio *sync.Cond
+	mtx_audio  sync.Mutex
 }
 
 type SetupCallback func(int)
 
 func NewProxyConnection() *ProxyConnection {
 	return &ProxyConnection{nil, nil, NewPriorityPreferenceLock(),
-		make(map[uint32]map[uint32]RemoteTile), make(map[uint32][]RemoteTile),
-		make(map[uint32]uint32), sync.Mutex{}}
+		make(map[uint32]map[uint32]RemoteTile), make(map[uint32][]RemoteTile), // Video
+		make(map[uint32]RemoteTile), make([]RemoteTile, 0), // Audio
+		make(map[uint32]uint32), sync.Mutex{},
+		nil, sync.Mutex{}, // Video mutex
+		nil, sync.Mutex{}, // Audio mutex
+	}
 }
 
 func (pc *ProxyConnection) sendPacket(b []byte, offset uint32, packet_type uint32) {
@@ -90,53 +124,111 @@ func (pc *ProxyConnection) SetupConnection(port string) {
 
 func (pc *ProxyConnection) StartListening() {
 	println("WebRTCPeer: Start listening for incoming data from DLL")
+	pc.cond_video = sync.NewCond(&pc.mtx_video)
+	pc.cond_audio = sync.NewCond(&pc.mtx_audio)
 	go func() {
 		for {
 			buffer := make([]byte, 1500)
 			_, _, _ = pc.conn.ReadFromUDP(buffer)
-			bufBinary := bytes.NewBuffer(buffer[4:28])
-			var p RemoteInputPacketHeader
-			err := binary.Read(bufBinary, binary.LittleEndian, &p)
-			if err != nil {
-				fmt.Printf("WebRTCPeer: Error: %s\n", err)
-				return
+			ptype := binary.LittleEndian.Uint32(buffer[:4])
+			if ptype == TilePacketType {
+				bufBinary := bytes.NewBuffer(buffer[4:28])
+				var p RemoteInputVideoPacketHeader
+				err := binary.Read(bufBinary, binary.LittleEndian, &p) // TODO: make sure we check endianess of system here and use that instead!
+				if err != nil {
+					fmt.Printf("WebRTCPeer: Error: %s\n", err)
+					return
+				}
+
+				pc.mtx_video.Lock()
+				//pc.m.Lock()
+				_, exists := pc.incomplete_tiles[p.TileNr]
+				if !exists {
+					pc.incomplete_tiles[p.TileNr] = make(map[uint32]RemoteTile)
+				}
+				_, exists = pc.incomplete_tiles[p.TileNr][p.FrameNr]
+				if !exists {
+					r := RemoteTile{
+						p.FrameNr,
+						0,
+						p.FrameLen,
+						make([]byte, p.FrameLen),
+					}
+					pc.incomplete_tiles[p.TileNr][p.FrameNr] = r
+					//fmt.Printf("WebRTCPeer: [VIDEO] DLL first packet of frame %d from tile %d with length %d  at %d\n",
+					//	p.FrameNr, p.TileNr, p.FrameLen, time.Now().UnixNano()/int64(time.Millisecond))
+				}
+				value := pc.incomplete_tiles[p.TileNr][p.FrameNr]
+				copy(value.fileData[p.FrameOffset:p.FrameOffset+p.PacketLen], buffer[28:28+p.PacketLen])
+				value.currentLen = value.currentLen + p.PacketLen
+				pc.incomplete_tiles[p.TileNr][p.FrameNr] = value
+				if value.currentLen == value.fileLen {
+					//fmt.Printf("WebRTCPeer: [VIDEO] DLL sent frame %d from tile %d with length %d  at %d\n",
+					//	p.FrameNr, p.TileNr, p.FrameLen, time.Now().UnixNano()/int64(time.Millisecond))
+					_, exists := pc.complete_tiles[p.TileNr]
+					if !exists {
+						pc.complete_tiles[p.TileNr] = make([]RemoteTile, 1)
+					}
+					// For now we will only save 1 frame for each tile max (do we want to save more?)
+					// TODO use channels instead
+					pc.complete_tiles[p.TileNr][0] = value
+					delete(pc.incomplete_tiles[p.TileNr], p.FrameNr)
+					pc.cond_video.Broadcast()
+				}
+				pc.mtx_video.Unlock()
+				//pc.m.Unlock()
+			} else if ptype == AudioPacketType {
+				bufBinary := bytes.NewBuffer(buffer[4:24])
+				var p RemoteInputAudioPacketHeader
+				err := binary.Read(bufBinary, binary.LittleEndian, &p) // TODO: make sure we check endianess of system here and use that instead!
+				if err != nil {
+					fmt.Printf("WebRTCPeer: Error: %s\n", err)
+					return
+				}
+				pc.mtx_audio.Lock()
+				_, exists := pc.incomplete_audio_frames[p.FrameNr]
+				if !exists {
+					r := RemoteTile{
+						p.FrameNr,
+						0,
+						p.FrameLen,
+						make([]byte, p.FrameLen),
+					}
+					pc.incomplete_audio_frames[p.FrameNr] = r
+					//fmt.Printf("WebRTCPeer: [AUDIO] DLL first packet of audio frame %d with length %d  at %d\n",
+					//	p.FrameNr, p.FrameLen, time.Now().UnixNano()/int64(time.Millisecond))
+				}
+				value := pc.incomplete_audio_frames[p.FrameNr]
+				copy(value.fileData[p.FrameOffset:p.FrameOffset+p.PacketLen], buffer[24:24+p.PacketLen])
+				value.currentLen = value.currentLen + p.PacketLen
+				pc.incomplete_audio_frames[p.FrameNr] = value
+				if value.currentLen == value.fileLen {
+					//fmt.Printf("WebRTCPeer: [AUDIO] DLL sent audio frame %d with length %d  at %d\n",
+					//	p.FrameNr, p.FrameLen, time.Now().UnixNano()/int64(time.Millisecond))
+					// For now we will only save 1 frame for each tile max (do we want to save more?)
+					// TODO use channels instead
+					if len(pc.complete_audio_frames) == 0 {
+						pc.complete_audio_frames = append(pc.complete_audio_frames, value)
+					} else {
+						pc.complete_audio_frames[0] = value
+					}
+
+					delete(pc.incomplete_audio_frames, p.FrameNr)
+					pc.cond_audio.Broadcast()
+				}
+				pc.mtx_audio.Unlock()
 			}
 
-			pc.m.Lock()
-			_, exists := pc.incomplete_tiles[p.TileNr]
-			if !exists {
-				pc.incomplete_tiles[p.TileNr] = make(map[uint32]RemoteTile)
-			}
-			_, exists = pc.incomplete_tiles[p.TileNr][p.FrameNr]
-			if !exists {
-				r := RemoteTile{
-					0,
-					p.TileLen,
-					make([]byte, p.TileLen),
-				}
-				pc.incomplete_tiles[p.TileNr][p.FrameNr] = r
-			}
-			value := pc.incomplete_tiles[p.TileNr][p.FrameNr]
-			copy(value.fileData[p.FrameOffset:p.FrameOffset+p.PacketLen], buffer[28:28+p.PacketLen])
-			value.currentLen = value.currentLen + p.PacketLen
-			pc.incomplete_tiles[p.TileNr][p.FrameNr] = value
-			if value.currentLen == value.fileLen {
-				fmt.Printf("WebRTCPeer: DLL sent frame %d from tile %d with length %d\n",
-					p.FrameNr, p.TileNr, p.TileLen)
-				_, exists := pc.complete_tiles[p.TileNr]
-				if !exists {
-					pc.complete_tiles[p.TileNr] = make([]RemoteTile, 0)
-				}
-				pc.complete_tiles[p.TileNr] = append(pc.complete_tiles[p.TileNr], value)
-				delete(pc.incomplete_tiles[p.TileNr], p.FrameNr)
-			}
-			pc.m.Unlock()
 		}
 	}()
 }
 
 func (pc *ProxyConnection) SendTilePacket(b []byte, offset uint32) {
 	pc.sendPacket(b, offset, TilePacketType)
+}
+
+func (pc *ProxyConnection) SendAudioPacket(b []byte, offset uint32) {
+	pc.sendPacket(b, offset, AudioPacketType)
 }
 
 func (pc *ProxyConnection) SendControlPacket(b []byte) {
@@ -146,23 +238,58 @@ func (pc *ProxyConnection) SendControlPacket(b []byte) {
 func (pc *ProxyConnection) NextTile(tile uint32) []byte {
 	isNextFrameReady := false
 	for !isNextFrameReady {
-		pc.m.HighPriorityLock()
-		_, exists := pc.complete_tiles[tile]
-		if !exists {
-			pc.complete_tiles[tile] = make([]RemoteTile, 0)
-		}
+		pc.mtx_video.Lock()
+		//pc.m.HighPriorityLock()
+		//_, exists := pc.complete_tiles[tile]
+		//if !exists {
+		//	pc.complete_tiles[tile] = make([]RemoteTile, 0, 1)
+		//}
 		if len(pc.complete_tiles[tile]) > 0 {
 			isNextFrameReady = true
 		} else {
-			pc.m.HighPriorityUnlock()
-			time.Sleep(time.Millisecond)
+			pc.cond_video.Wait()
+			isNextFrameReady = true
+			//pc.m.HighPriorityUnlock()
+			//time.Sleep(time.Millisecond)
 		}
 	}
 	data := pc.complete_tiles[tile][0].fileData
-	fmt.Printf("WebRTCPeer: Sending out frame %d from tile %d with size %d\n",
-		pc.frame_counters[tile], tile, pc.complete_tiles[tile][0].fileLen)
-	pc.complete_tiles[tile] = pc.complete_tiles[tile][1:]
+	//frameNr := pc.complete_tiles[tile][0].frameNr
+	//fmt.Printf("WebRTCPeer: [VIDEO] Sending out frame %d from tile %d with size %d at %d\n",
+	//	frameNr, tile, pc.complete_tiles[tile][0].fileLen, time.Now().UnixNano()/int64(time.Millisecond))
+	delete(pc.complete_tiles, tile)
+	// Do we still need frame counter? Seems more logical to use the actual frame nr
 	pc.frame_counters[tile] += 1
-	pc.m.HighPriorityUnlock()
+	pc.mtx_video.Unlock()
+	//pc.m.HighPriorityUnlock()
+	return data
+}
+
+func (pc *ProxyConnection) NextAudioFrame() []byte {
+	isNextFrameReady := false
+	for !isNextFrameReady {
+		pc.mtx_audio.Lock()
+		//pc.m.HighPriorityLock()
+		//_, exists := pc.complete_tiles[tile]
+		//if !exists {
+		//	pc.complete_tiles[tile] = make([]RemoteTile, 0, 1)
+		//}
+		if len(pc.complete_audio_frames) > 0 {
+			isNextFrameReady = true
+		} else {
+			pc.cond_audio.Wait()
+			isNextFrameReady = true
+			//pc.m.HighPriorityUnlock()
+			//time.Sleep(time.Millisecond)
+		}
+	}
+	data := pc.complete_audio_frames[0].fileData
+	//frameNr := pc.complete_audio_frames[0].frameNr
+	//fmt.Printf("WebRTCPeer: [AUDIO] Sending out audio frame %d with size %d at %d\n",
+	//	frameNr, pc.complete_audio_frames[0].fileLen, time.Now().UnixNano()/int64(time.Millisecond))
+	pc.complete_audio_frames = pc.complete_audio_frames[:0]
+	// Do we still need frame counter? Seems more logical to use the actual frame nr
+	pc.mtx_audio.Unlock()
+	//pc.m.HighPriorityUnlock()
 	return data
 }

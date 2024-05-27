@@ -370,6 +370,13 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("WebRTCSFU: webSocketHandler: Iterating over video tracks")
 
+	if _, err := peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{
+		Direction: webrtc.RTPTransceiverDirectionRecvonly,
+	}); err != nil {
+		fmt.Printf("WebRTCSFU: webSocketHandler: ERROR: %s\n", err)
+		return
+	}
+	// Is this even used? We dont do anything with the return variable
 	for i := 0; i < *maxNumberOfTiles; i++ {
 		if _, err := peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo, webrtc.RTPTransceiverInit{
 			Direction: webrtc.RTPTransceiverDirectionRecvonly,
