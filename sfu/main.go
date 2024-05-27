@@ -148,6 +148,7 @@ func removeTrackforPeer(pcState peerConnectionState, trackID string) {
 	}
 }
 
+// TODO does this work with multiple tiles / audio?
 // signalPeerConnections updates each PeerConnection so that it is getting all the expected media tracks
 func signalPeerConnections() {
 	fmt.Println("WebRTCSFU: signalPeerConnections")
@@ -295,8 +296,8 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		{Type: "nack", Parameter: ""},
 		{Type: "nack", Parameter: "pli"},
 	}
-
-	codecCapability := webrtc.RTPCodecCapability{
+	// TODO Audio RTP
+	videoCodecCapability := webrtc.RTPCodecCapability{
 		MimeType:     "video/pcm",
 		ClockRate:    90000,
 		Channels:     0,
@@ -304,10 +305,25 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		RTCPFeedback: videoRTCPFeedback,
 	}
 
+	audioCodecCapability := webrtc.RTPCodecCapability{
+		MimeType:     "audio/pcm",
+		ClockRate:    90000,
+		Channels:     0,
+		SDPFmtpLine:  "",
+		RTCPFeedback: nil,
+	}
+
 	if err := mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: codecCapability,
+		RTPCodecCapability: videoCodecCapability,
 		PayloadType:        5,
 	}, webrtc.RTPCodecTypeVideo); err != nil {
+		panic(err)
+	}
+
+	if err := mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: audioCodecCapability,
+		PayloadType:        6,
+	}, webrtc.RTPCodecTypeAudio); err != nil {
 		panic(err)
 	}
 
@@ -363,6 +379,15 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	fmt.Println("WebRTCSFU: webSocketHandler: Adding audio track")
+
+	if _, err := peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{
+		Direction: webrtc.RTPTransceiverDirectionRecvonly,
+	}); err != nil {
+		fmt.Printf("WebRTCSFU: webSocketHandler: ERROR: %s\n", err)
+		return
+	}
+
 	fmt.Println("WebRTCSFU: webSocketHandler: Waiting for lock")
 
 	// Add our new PeerConnection to global list
@@ -408,6 +433,9 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 
 	peerConnection.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		// Create a track to fan out our incoming video to all peers
+		//if t.Kind() == webrtc.RTPCodecTypeAudio {
+		//	return
+		//}
 		trackLocal := addTrack(t)
 		defer func() {
 			fmt.Printf("WebRTCSFU: OnTrack: removing track %w\n", trackLocal.ID)
