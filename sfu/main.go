@@ -151,8 +151,6 @@ func removeTrackforPeer(pcState peerConnectionState, trackID string) {
 // TODO does this work with multiple tiles / audio?
 // signalPeerConnections updates each PeerConnection so that it is getting all the expected media tracks
 func signalPeerConnections() {
-	fmt.Println("WebRTCSFU: [All Clients] signalPeerConnections")
-
 	listLock.Lock()
 	defer func() {
 		listLock.Unlock()
@@ -240,7 +238,7 @@ func signalPeerConnections() {
 		return
 	}
 
-	fmt.Println("WebRTCSFU: [All clients] signalPeerConnections: attempting sync")
+	fmt.Println("WebRTCSFU: [All clients] signalPeerConnections: attempting sync of available tracks")
 
 	for syncAttempt := 0; ; syncAttempt++ {
 		if syncAttempt == 1 {
