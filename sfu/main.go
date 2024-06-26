@@ -58,7 +58,7 @@ func main() {
 	maxNumberOfTiles = flag.Int("t", 1, "Number of tiles")
 	flag.Parse()
 
-	fmt.Printf("WebRTCSFU: Starting SFU with at most %d tiles per client\n", *maxNumberOfTiles)
+	fmt.Printf("WebRTCSFU: Starting SFU with default %d tiles per client\n", *maxNumberOfTiles)
 
 	settingEngine := webrtc.SettingEngine{}
 	settingEngine.SetSCTPMaxReceiveBufferSize(16 * 1024 * 1024)
@@ -259,7 +259,17 @@ func signalPeerConnections() {
 
 // Handle incoming websockets
 func websocketHandler(w http.ResponseWriter, r *http.Request) {
-
+	for k, v := range r.URL.Query() {
+		fmt.Printf("%s %s \n", k, v)
+	}
+	numberOfTiles := *maxNumberOfTiles
+	numberOfTilesS := r.URL.Query().Get("ntiles")
+	if numberOfTilesS != "" {
+		i, err := strconv.Atoi(numberOfTilesS)
+		if err == nil {
+			numberOfTiles = i
+		}
+	}
 	listLock.Lock()
 	currentPCID := pcID
 	pcID++
@@ -378,8 +388,8 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Iterating and adding video tracks\n", currentPCID)
-	for i := 0; i < *maxNumberOfTiles; i++ {
+	fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Iterating and adding %d video tracks\n", currentPCID, numberOfTiles)
+	for i := 0; i < numberOfTiles; i++ {
 		if _, err := peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo, webrtc.RTPTransceiverInit{
 			Direction: webrtc.RTPTransceiverDirectionRecvonly,
 		}); err != nil {
