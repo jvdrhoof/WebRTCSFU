@@ -23,9 +23,9 @@ type WebsocketHandler struct {
 	writeLock sync.RWMutex
 }
 
-func NewWSHandler(addr, path string) *WebsocketHandler {
+func NewWSHandler(addr, path string, numberOfTiles int) *WebsocketHandler {
 	fmt.Printf("WebRTCPeer: NewWSHandler: addr %s, path %s\n", addr, path)
-	u := url.URL{Scheme: "ws", Host: addr, Path: path}
+	u := url.URL{Scheme: "ws", Host: addr, Path: path, RawQuery: "ntiles=" + strconv.Itoa(numberOfTiles)}
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
 		fmt.Printf("WebRTCPeer: NewWSHandler: ERROR: %s\n", err)

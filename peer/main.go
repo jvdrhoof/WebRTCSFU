@@ -46,14 +46,13 @@ func main() {
 		println("WebRTCPeer: ERROR: port cannot equal :0")
 		os.Exit(1)
 	}
-
 	fmt.Printf("WebRTCPeer: Starting client %d with %d tiles\n", *clientID, *numberOfTiles)
 
 	proxyConn = NewProxyConnection()
 	proxyConn.SetupConnection(*proxyPort)
 	var transcoder Transcoder
 	if *useProxyInput {
-		proxyConn.StartListening()
+		proxyConn.StartListening(*numberOfTiles)
 		transcoder = NewTranscoderRemote(proxyConn)
 	} else {
 		transcoder = NewTranscoderDummy(proxyConn)
@@ -214,7 +213,7 @@ func main() {
 	estimator := <-estimatorChan
 
 	// Create custom websocket handler on SFU address
-	wsHandler := NewWSHandler(*sfuAddress, "/websocket")
+	wsHandler := NewWSHandler(*sfuAddress, "/websocket", *numberOfTiles)
 
 	peerConnection.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
@@ -249,15 +248,19 @@ func main() {
 				}
 
 			}()
-			for {
-				targetBitrate := uint32(estimator.GetTargetBitrate())
-				transcoder.UpdateBitrate(targetBitrate)
-				for i := 0; i < *numberOfTiles; i++ {
-					// TODO maybe change writeframe into goroutines?
-					if err = videoTracks[i].WriteFrame(transcoder, uint32(i)); err != nil {
-						panic(err)
+			targetBitrate := uint32(estimator.GetTargetBitrate()) // TODO probably remove this as it currently useless
+			transcoder.UpdateBitrate(targetBitrate)               // and this
+			for i := 0; i < *numberOfTiles; i++ {
+				// TODO maybe change writeframe into goroutines?
+
+				go func(tileNr int) {
+					fmt.Printf("%d calling", tileNr)
+					for {
+						if err = videoTracks[tileNr].WriteFrame(transcoder, uint32(tileNr)); err != nil {
+							//panic(err)
+						}
 					}
-				}
+				}(i)
 			}
 		}
 	})
@@ -268,9 +271,9 @@ func main() {
 		fmt.Printf("WebRTCPeer: Track SSRC %d\n", track.SSRC())
 		// TODO: check the puprose of this code fragment
 		// Currently this removes stuff like audio_1 (audio track second client) and video_X_1 (second tile for user X)?
-		if track.ID()[len(track.ID())-1] == '1' && track.Kind() == webrtc.RTPCodecTypeVideo {
-			wsHandler.SendMessage(WebsocketPacket{1, 5, track.ID()})
-		}
+		//if track.ID()[len(track.ID())-1] == '1' && track.Kind() == webrtc.RTPCodecTypeVideo {
+		//	wsHandler.SendMessage(WebsocketPacket{1, 5, track.ID()})
+		//}
 
 		codecName := strings.Split(track.Codec().RTPCodecCapability.MimeType, "/")
 		fmt.Printf("WebRTCPeer: Track of type %d has started: %s\n", track.PayloadType(), codecName)

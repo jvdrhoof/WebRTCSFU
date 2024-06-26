@@ -65,7 +65,7 @@ type ProxyConnection struct {
 	// Cond gives better performance compared to high priority lock
 	// High prio lock => latency between 3 and 10ms
 	// Condi lock => latency between 0 and 1ms
-	cond_video *sync.Cond
+	cond_video map[uint32]*sync.Cond
 	mtx_video  sync.Mutex
 
 	cond_audio *sync.Cond
@@ -79,7 +79,7 @@ func NewProxyConnection() *ProxyConnection {
 		make(map[uint32]map[uint32]RemoteTile), make(map[uint32][]RemoteTile), // Video
 		make(map[uint32]RemoteTile), make([]RemoteTile, 0), // Audio
 		make(map[uint32]uint32), sync.Mutex{},
-		nil, sync.Mutex{}, // Video mutex
+		make(map[uint32]*sync.Cond), sync.Mutex{}, // Video mutex
 		nil, sync.Mutex{}, // Audio mutex
 	}
 }
@@ -142,9 +142,11 @@ func (pc *ProxyConnection) SetupConnection(port string) {
 	fmt.Println("WebRTCPeer: Connected to Unity DLL")
 }
 
-func (pc *ProxyConnection) StartListening() {
+func (pc *ProxyConnection) StartListening(nTiles int) {
 	println("WebRTCPeer: Start listening for incoming data from DLL")
-	pc.cond_video = sync.NewCond(&pc.mtx_video)
+	for i := 0; i < nTiles; i++ {
+		pc.cond_video[uint32(i)] = sync.NewCond(&pc.mtx_video)
+	}
 	pc.cond_audio = sync.NewCond(&pc.mtx_audio)
 	go func() {
 		for {
@@ -193,7 +195,7 @@ func (pc *ProxyConnection) StartListening() {
 					// TODO use channels instead
 					pc.complete_tiles[p.TileNr][0] = value
 					delete(pc.incomplete_tiles[p.TileNr], p.FrameNr)
-					pc.cond_video.Broadcast()
+					pc.cond_video[p.TileNr].Broadcast() // TODO check if order broadcast -> unlock is correct
 				}
 				pc.mtx_video.Unlock()
 				//pc.m.Unlock()
@@ -271,7 +273,7 @@ func (pc *ProxyConnection) NextTile(tile uint32) []byte {
 		if len(pc.complete_tiles[tile]) > 0 {
 			isNextFrameReady = true
 		} else {
-			pc.cond_video.Wait()
+			pc.cond_video[tile].Wait()
 			isNextFrameReady = true
 			//pc.m.HighPriorityUnlock()
 			//time.Sleep(time.Millisecond)
