@@ -5,10 +5,13 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 )
 
 const (
+	ReadyPacketType   uint32 = 0
 	TilePacketType    uint32 = 1
 	ControlPacketType uint32 = 3
 	AudioPacketType   uint32 = 2
@@ -109,16 +112,33 @@ func (pc *ProxyConnection) SetupConnection(port string) {
 	}
 
 	// Create a buffer to read incoming messages
-	buffer := make([]byte, 1500)
+	port_info := strings.Split(port, ":")
+	if port_info[0] == "" {
+		port_int, _ := strconv.Atoi(port_info[1])
+		port_string := strconv.Itoa(port_int + 1)
+		port = "127.0.0.1:" + port_string
+	} else {
+		port_int, _ := strconv.Atoi(port_info[1])
+		port_string := strconv.Itoa(port_int + 1)
+		port = port_info[0] + ":" + port_string
+	}
 
-	// Wait for incoming messages
-	fmt.Println("WebRTCPeer: Waiting for a message...")
-	_, pc.addr, err = pc.conn.ReadFromUDP(buffer)
+	pc.addr, err = net.ResolveUDPAddr("udp", port)
 	if err != nil {
 		fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
 		return
 	}
 
+	pc.SendPeerReadyPacket()
+	buffer := make([]byte, 1500)
+
+	// Wait for incoming messages
+	fmt.Println("WebRTCPeer: Waiting for a message...", port, pc.addr.IP.String())
+	_, pc.addr, err = pc.conn.ReadFromUDP(buffer)
+	if err != nil {
+		fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
+		return
+	}
 	fmt.Println("WebRTCPeer: Connected to Unity DLL")
 }
 
@@ -221,6 +241,10 @@ func (pc *ProxyConnection) StartListening() {
 
 		}
 	}()
+}
+
+func (pc *ProxyConnection) SendPeerReadyPacket() {
+	pc.sendPacket(make([]byte, 100), 0, ReadyPacketType)
 }
 
 func (pc *ProxyConnection) SendTilePacket(b []byte, offset uint32) {

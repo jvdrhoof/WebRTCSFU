@@ -42,13 +42,12 @@ func main() {
 	clientID = flag.Int("c", 0, "Client ID")
 	numberOfTiles := flag.Int("t", 1, "Number of tiles")
 	flag.Parse()
-
 	if *proxyPort == ":0" {
 		println("WebRTCPeer: ERROR: port cannot equal :0")
 		os.Exit(1)
 	}
 
-	fmt.Printf("WebRTCPeer: Starting client %d\n", *clientID)
+	fmt.Printf("WebRTCPeer: Starting client %d with %d tiles\n", *clientID, *numberOfTiles)
 
 	proxyConn = NewProxyConnection()
 	proxyConn.SetupConnection(*proxyPort)
@@ -309,7 +308,7 @@ func main() {
 				}
 
 				frames[p.FrameNr] += p.SeqLen
-				if frames[p.FrameNr] == p.FrameLen {
+				if frames[p.FrameNr] == p.FrameLen && p.FrameNr%100 == 0 {
 					fmt.Printf("WebRTCPeer: [VIDEO] Received video frame %d from client %d and tile %d with length %d\n",
 						p.FrameNr, p.ClientNr, p.TileNr, p.FrameLen)
 				}
@@ -324,7 +323,7 @@ func main() {
 					panic(err)
 				}
 				frames[p.FrameNr] += p.SeqLen
-				if frames[p.FrameNr] == p.FrameLen {
+				if frames[p.FrameNr] == p.FrameLen && p.FrameNr%100 == 0 {
 					fmt.Printf("WebRTCPeer: [AUDIO] Received audio frame %d from client %d with length %d\n",
 						p.FrameNr, p.ClientNr, p.FrameLen)
 				}
