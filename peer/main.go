@@ -147,6 +147,7 @@ func main() {
 
 	var candidatesMux sync.Mutex
 	pendingCandidates := make([]*webrtc.ICECandidate, 0)
+	pendingCandidatesString := make([]string, 0)
 	peerConnection, err := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine), webrtc.WithInterceptorRegistry(i), webrtc.WithMediaEngine(m)).NewPeerConnection(webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{
@@ -397,15 +398,26 @@ func main() {
 				payload := []byte(c.ToJSON().Candidate)
 				wsHandler.SendMessage(WebsocketPacket{1, 4, string(payload)})
 			}
+			for _, c := range pendingCandidatesString {
+				if candidateErr := peerConnection.AddICECandidate(webrtc.ICECandidateInit{Candidate: c}); candidateErr != nil {
+					panic(candidateErr)
+				}
+			}
 			candidatesMux.Unlock()
 			state = Answer
 			fmt.Printf("WebRTCPeer: Current state: %d\n", state)
 		case 4: // candidate
 			fmt.Println("WebRTCPeer: Received candidate")
 			candidate := wsPacket.Message
-			if candidateErr := peerConnection.AddICECandidate(webrtc.ICECandidateInit{Candidate: candidate}); candidateErr != nil {
-				panic(candidateErr)
+			desc := peerConnection.RemoteDescription()
+			if desc == nil {
+				pendingCandidatesString = append(pendingCandidatesString, candidate)
+			} else {
+				if candidateErr := peerConnection.AddICECandidate(webrtc.ICECandidateInit{Candidate: candidate}); candidateErr != nil {
+					panic(candidateErr)
+				}
 			}
+
 		default:
 			fmt.Printf("WebRTCPeer: Received non-compliant message type %d\n", wsPacket.MessageType)
 		}
