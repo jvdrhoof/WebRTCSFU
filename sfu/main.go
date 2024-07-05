@@ -148,6 +148,31 @@ func removeTrackforPeer(pcState peerConnectionState, trackID string) {
 	}
 }
 
+func contains(s []string, e string) bool {
+	for _, a := range s {
+		if a == e {
+			return true
+		}
+	}
+	return false
+}
+
+func receiveTracks(pcState peerConnectionState, trackIDs []string) {
+	v := undesireableTracks[pcState.ID]
+	for _, sender := range pcState.peerConnection.GetSenders() {
+		trackID := sender.Track().ID()
+		if contains(trackIDs, trackID) {
+			if contains(v, trackID) {
+				addTrackforPeer(pcState, trackID)
+			}
+		} else {
+			if !contains(v, trackID) {
+				removeTrackforPeer(pcState, trackID)
+			}
+		}
+	}
+}
+
 // TODO does this work with multiple tiles / audio?
 // signalPeerConnections updates each PeerConnection so that it is getting all the expected media tracks
 func signalPeerConnections() {
@@ -449,7 +474,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		//}
 		trackLocal := addTrack(&pcState, t)
 		defer func() {
-			fmt.Printf("WebRTCSFU: [Client #%d] OnTrack: removing track %s\n", pcState.ID, trackLocal.ID())
+			fmt.Printf("WebRTCSFU: [Client #%d] OnTrack: Removing track %s\n", pcState.ID, trackLocal.ID())
 			removeTrack(&pcState, trackLocal)
 		}()
 
@@ -457,12 +482,12 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		for {
 			i, _, err := t.Read(buf)
 			if err != nil {
-				fmt.Printf("WebRTCSFU: [Client #%d] OnTrack: track %s error during read: %s\n", pcState.ID, trackLocal.ID(), err)
+				fmt.Printf("WebRTCSFU: [Client #%d] OnTrack: Track %s error during read: %s\n", pcState.ID, trackLocal.ID(), err)
 				break
 			}
 
 			if _, err = trackLocal.Write(buf[:i]); err != nil {
-				fmt.Printf("WebRTCSFU: [Client #%d] OnTrack: track %s error during write: %s\n", pcState.ID, trackLocal.ID(), err)
+				fmt.Printf("WebRTCSFU: [Client #%d] OnTrack: Track %s error during write: %s\n", pcState.ID, trackLocal.ID(), err)
 				break
 			}
 		}
@@ -505,6 +530,20 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		// add track
 		case 6:
 			addTrackforPeer(pcState, message)
+		// tile qualities
+		case 7:
+			fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Setting tile priorities (%s)\n", pcState.ID, message)
+			var trackIDs []string
+			v := strings.Split(message, ";")
+			for _, w := range v {
+				x := strings.Split(w, ",")
+				clientID := x[0]
+				for _, tileID := range x[1:] {
+					trackID := fmt.Sprintf("video_%s_%s", clientID, tileID)
+					trackIDs = append(trackIDs, trackID)
+				}
+			}
+			receiveTracks(pcState, trackIDs)
 		}
 	}
 }
@@ -523,6 +562,9 @@ func websocketMessageTypeToString(messageType uint64) string {
 	// add track
 	case 6:
 		return "Add Track"
+	// tile priorities
+	case 7:
+		return "Tile priorities"
 	}
 	return "Unknown Message Type"
 }
