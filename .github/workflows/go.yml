@@ -10,22 +10,17 @@ on:
     branches: [ "master" ]
 
 jobs:
-
-  build-matrix:
+  build_matrix:
     strategy:
       matrix:
-          os:
-            - ubuntu-latest
-            - windows-latest
-            - macos-latest
-          include:
+        include:
             - os: ubuntu-latest
               TARGET: x86_64-unknown-linux
             - os: windows-latest
               TARGET: x86_64-apple-darwin
             - os: macos-latest
               TARGET: x86_64-unknown-windows
-        runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
