@@ -14,11 +14,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-   - name: Build & Test
-        uses: ashutoshvarma/action-cmake-build@master
-        with:
+    - name: Build & Test
+      uses: ashutoshvarma/action-cmake-build@master
+      with:
           build-dir: ${{ runner.workspace }}/build
           build-type: Release
           install-build: true
