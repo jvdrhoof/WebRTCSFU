@@ -6,7 +6,7 @@ name: Go
 on:
   push:
     branches: [ "master", "2-github-actions" ]
-    tags:
+    tags: ["*"]
   pull_request:
     branches: [ "master" ]
 
