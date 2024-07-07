@@ -11,8 +11,17 @@ on:
 
 jobs:
 
-  build:
-    runs-on: ubuntu-latest
+  build-matrix:
+    strategy:
+      matrix:
+        os: 
+        - ubuntu-latest
+          env: TRIPLET=x86_64-linux
+        - windows-latest
+          env: TRIPLET=x86_64-darwin
+        - macos-latest
+          env: TRIPLET=x86_64-windows
+    runs-on: ${{ matrix.os }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -20,6 +29,19 @@ jobs:
     - name: Build & Test
       uses: ashutoshvarma/action-cmake-build@master
       with:
-          build-dir: ${{ runner.workspace }}/build
-          build-type: Release
-          install-build: true
+        build-dir: ${{ runner.workspace }}/build
+        build-type: Release
+        configure-options: -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/installed
+        install-build: true
+          
+    - name: Capture installed folder
+      shell: bash
+      run: |
+            tar -c -v -f webrtcsfu-${TRIPLET}.tgz -z -C installed .
+
+    - name: Upload installed folder
+      uses: actions/upload-artifact@v3
+      with:
+        name: webrtcsfu-${TRIPLET}.tgz
+        path: webrtcsfu-${TRIPLET}.tgz
+        
