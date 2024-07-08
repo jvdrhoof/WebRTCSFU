@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"github.com/pion/interceptor"
-	"github.com/pion/interceptor/pkg/cc"
-	"github.com/pion/interceptor/pkg/gcc"
 	"github.com/pion/interceptor/pkg/nack"
 	"github.com/pion/interceptor/pkg/twcc"
 	"github.com/pion/rtp"
@@ -33,6 +31,7 @@ const (
 
 var proxyConn *ProxyConnection
 var clientID *int
+var enableDebug bool
 
 func main() {
 	sfuAddress := flag.String("sfu", "localhost:8080", "SFU address")
@@ -41,26 +40,31 @@ func main() {
 	useProxyOutput := flag.Bool("o", false, "Forward content received over WebRTC to the DLL")
 	clientID = flag.Int("c", 0, "Client ID")
 	numberOfTiles := flag.Int("t", 1, "Number of tiles")
+	enableDebugF := flag.Bool("d", false, "Enable debug instead of remote tiles")
 	flag.Parse()
-	if *proxyPort == ":0" {
+	enableDebug = *enableDebugF
+	if *proxyPort == ":0" && !enableDebug {
 		println("WebRTCPeer: ERROR: port cannot equal :0")
 		os.Exit(1)
 	}
 	fmt.Printf("WebRTCPeer: Starting client %d with %d tiles\n", *clientID, *numberOfTiles)
 
-	proxyConn = NewProxyConnection()
-	proxyConn.SetupConnection(*proxyPort)
 	var transcoder Transcoder
-	if *useProxyInput {
-		proxyConn.StartListening(*numberOfTiles)
-		transcoder = NewTranscoderRemote(proxyConn)
-	} else {
-		transcoder = NewTranscoderDummy(proxyConn)
+	if !enableDebug {
+		proxyConn = NewProxyConnection()
+		proxyConn.SetupConnection(*proxyPort)
+
+		if *useProxyInput {
+			proxyConn.StartListening(*numberOfTiles)
+			transcoder = NewTranscoderRemote(proxyConn)
+		} else {
+			transcoder = NewTranscoderDummy(proxyConn)
+		}
 	}
 
 	settingEngine := webrtc.SettingEngine{}
 	settingEngine.SetSCTPMaxReceiveBufferSize(16 * 1024 * 1024)
-
+	//settingEngine.SetDTLSCustomerCipherSuites()
 	i := &interceptor.Registry{}
 	m := &webrtc.MediaEngine{}
 	if err := m.RegisterDefaultCodecs(); err != nil {
@@ -103,23 +107,23 @@ func main() {
 	}, webrtc.RTPCodecTypeAudio); err != nil {
 		panic(err)
 	}
-	congestionController, err := cc.NewInterceptor(func() (cc.BandwidthEstimator, error) {
+	/*congestionController, err := cc.NewInterceptor(func() (cc.BandwidthEstimator, error) {
 		return gcc.NewSendSideBWE(gcc.SendSideBWEMinBitrate(75_000*8), gcc.SendSideBWEInitialBitrate(75_000_000), gcc.SendSideBWEMaxBitrate(262_744_320))
 	})
 	if err != nil {
 		panic(err)
-	}
+	}*/
 
 	m.RegisterFeedback(webrtc.RTCPFeedback{Type: "nack"}, webrtc.RTPCodecTypeVideo)
 	m.RegisterFeedback(webrtc.RTCPFeedback{Type: "nack", Parameter: "pli"}, webrtc.RTPCodecTypeVideo)
 
-	estimatorChan := make(chan cc.BandwidthEstimator, 1)
+	/*estimatorChan := make(chan cc.BandwidthEstimator, 1)
 	congestionController.OnNewPeerConnection(func(id string, estimator cc.BandwidthEstimator) {
 		estimatorChan <- estimator
 	})
 
-	i.Add(congestionController)
-	if err = webrtc.ConfigureTWCCHeaderExtensionSender(m, i); err != nil {
+	i.Add(congestionController)*/
+	if err := webrtc.ConfigureTWCCHeaderExtensionSender(m, i); err != nil {
 		panic(err)
 	}
 
@@ -211,7 +215,7 @@ func main() {
 		}
 	}()
 
-	estimator := <-estimatorChan
+	//estimator := <-estimatorChan
 
 	// Create custom websocket handler on SFU address
 	wsHandler := NewWSHandler(*sfuAddress, "/websocket", *numberOfTiles)
@@ -244,25 +248,57 @@ func main() {
 				// Potentially combine audio frames into single packet?
 				// Would add small delay but might be more optimal?
 				// Atm audio frame is around 126 bytes so WebRTC overhead might be too much
-				for {
-					audioTrack.WriteAudioFrame(proxyConn.NextAudioFrame())
+				if enableDebug {
+					for {
+						audioTrack.WriteAudioFrame([]byte("test"))
+						time.Sleep(30 * time.Millisecond)
+					}
+				} else {
+					for {
+						audioTrack.WriteAudioFrame(proxyConn.NextAudioFrame())
+					}
 				}
 
 			}()
-			targetBitrate := uint32(estimator.GetTargetBitrate()) // TODO probably remove this as it currently useless
-			transcoder.UpdateBitrate(targetBitrate)               // and this
+			//targetBitrate := uint32(estimator.GetTargetBitrate()) // TODO probably remove this as it currently useless
+			//transcoder.UpdateBitrate(100000000) // and this
 			for i := 0; i < *numberOfTiles; i++ {
 				// TODO maybe change writeframe into goroutines?
-
 				go func(tileNr int) {
-					fmt.Printf("%d calling", tileNr)
+					cc := 0
 					for {
 						if err = videoTracks[tileNr].WriteFrame(transcoder, uint32(tileNr)); err != nil {
 							//panic(err)
 						}
+						if enableDebug {
+							if cc%100 == 0 {
+								fmt.Printf("WebRTCPeer: [SEND] FRAME %d at %d \n", cc, time.Now().UnixMilli())
+							}
+							cc++
+							time.Sleep(30 * time.Millisecond)
+						}
 					}
 				}(i)
 			}
+			go func() {
+				isAdd := false
+				//time.Sleep(10000 * time.Millisecond)
+				otherClientStr := "1"
+				if *clientID == 1 {
+					otherClientStr = "0"
+				}
+				for {
+					if isAdd {
+						wsHandler.SendMessage(WebsocketPacket{1, 7, otherClientStr + ",0"})
+						isAdd = false
+					} else {
+						wsHandler.SendMessage(WebsocketPacket{1, 7, otherClientStr})
+						isAdd = true
+					}
+
+					time.Sleep(500 * time.Millisecond)
+				}
+			}()
 		}
 	})
 
@@ -292,6 +328,7 @@ func main() {
 				fmt.Printf("WebRTCPeer: Can no longer read from track %s, terminating %s\n", track.ID(), readErr.Error())
 				break
 			}
+
 			if *useProxyOutput {
 				if track.Kind() == webrtc.RTPCodecTypeVideo {
 					proxyConn.SendTilePacket(buf, 20)
@@ -511,11 +548,19 @@ func (s *TrackLocalCloudRTP) WriteFrame(t Transcoder, tile uint32) error {
 		return nil
 	}
 	samples := uint32(1 * clockRate)
-	data := t.EncodeFrame(tile)
+	var data []byte
+	if enableDebug {
+		data = make([]byte, 50000)
+	} else {
+		data = t.EncodeFrame(tile)
+	}
+
 	if data != nil {
 		packets := p.Packetize(data, samples)
 		counter := 0
+
 		for _, p := range packets {
+			//	go func(p *rtp.Packet) {
 			if err := s.rtpTrack.WriteRTP(p); err != nil {
 				fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
 			}
