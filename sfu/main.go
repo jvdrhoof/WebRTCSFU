@@ -19,9 +19,6 @@ import (
 	"github.com/pion/interceptor"
 	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v3"
-
-	"github.com/pion/interceptor/pkg/cc"
-	"github.com/pion/interceptor/pkg/gcc"
 )
 
 var (
@@ -49,9 +46,12 @@ type WebsocketPacket struct {
 }
 
 type peerConnectionState struct {
-	peerConnection *webrtc.PeerConnection
-	websocket      *threadSafeWriter
-	ID             int
+	peerConnection  *webrtc.PeerConnection
+	websocket       *threadSafeWriter
+	ID              int
+	trackRTPSenders map[string]*webrtc.RTPSender
+
+	pendingCandidatesString []string
 }
 
 func main() {
@@ -125,9 +125,19 @@ func removeTrack(pcState *peerConnectionState, t *webrtc.TrackLocalStaticRTP) {
 
 func addTrackforPeer(pcState peerConnectionState, trackID string) {
 	trackLocal := trackLocals[trackID]
-	if _, err := pcState.peerConnection.AddTrack(trackLocal); err != nil {
-		panic(err)
+	if rtpSender, keyExists := pcState.trackRTPSenders[trackID]; keyExists {
+		if rtpSender.Track() == nil || rtpSender.Track().ID() != trackID {
+			rtpSender.ReplaceTrack(trackLocal)
+		}
+	} else {
+		var sender *webrtc.RTPSender
+		var err error
+		if sender, err = pcState.peerConnection.AddTrack(trackLocal); err != nil {
+			panic(err)
+		}
+		pcState.trackRTPSenders[trackID] = sender
 	}
+
 	v := undesireableTracks[pcState.ID]
 	for i, t := range v {
 		if t == trackID {
@@ -139,13 +149,18 @@ func addTrackforPeer(pcState peerConnectionState, trackID string) {
 }
 
 func removeTrackforPeer(pcState peerConnectionState, trackID string) {
-	for _, sender := range pcState.peerConnection.GetSenders() {
+	if rtpSender, exists := pcState.trackRTPSenders[trackID]; exists {
+		rtpSender.ReplaceTrack(nil)
+		// TODO Maybe send rtcp packet to client to inform him that track is now replaced? i.e. use rtpSender.Transport().WriteRTCP()
+		//undesireableTracks[pcState.ID] = append(undesireableTracks[pcState.ID], trackID)
+	}
+	/*for _, sender := range pcState.peerConnection.GetSenders() {
 		if sender.Track().ID() == trackID {
 			pcState.peerConnection.RemoveTrack(sender)
 			undesireableTracks[pcState.ID] = append(undesireableTracks[pcState.ID], trackID)
 			break
 		}
-	}
+	}*/
 }
 
 func contains(s []string, e string) bool {
@@ -158,7 +173,32 @@ func contains(s []string, e string) bool {
 }
 
 func receiveTracks(pcState peerConnectionState, trackIDs []string) {
-	v := undesireableTracks[pcState.ID]
+	//v := undesireableTracks[pcState.ID]
+	for senderId, sender := range pcState.trackRTPSenders {
+		if sender.Track() != nil && sender.Track().Kind() == webrtc.RTPCodecTypeAudio {
+			continue
+		}
+		hasAdded := false
+		for _, id := range trackIDs {
+			if senderId == id {
+				addTrackforPeer(pcState, id)
+				hasAdded = true
+				break
+			}
+		}
+		if !hasAdded {
+			removeTrackforPeer(pcState, senderId)
+		}
+	}
+	/*for _, t := range trackIDs {
+		if sender, exists := pcState.trackRTPSenders[t]; exists {
+			if sender.Track() == nil {
+				if track, trackExists := trackLocals[t]; trackExists {
+					sender.ReplaceTrack(track)
+				}
+			}
+		}
+	}
 	for _, sender := range pcState.peerConnection.GetSenders() {
 		trackID := sender.Track().ID()
 		if contains(trackIDs, trackID) {
@@ -170,7 +210,7 @@ func receiveTracks(pcState peerConnectionState, trackIDs []string) {
 				removeTrackforPeer(pcState, trackID)
 			}
 		}
-	}
+	}*/
 }
 
 // TODO does this work with multiple tiles / audio?
@@ -200,6 +240,8 @@ func signalPeerConnections() {
 
 				// If we have a RTPSender that doesn't map to a existing track remove and signal
 				if _, ok := trackLocals[sender.Track().ID()]; !ok {
+					// TODO remove from undesireable track if exists?
+					delete(peerConnections[i].trackRTPSenders, sender.Track().ID())
 					if err := peerConnections[i].peerConnection.RemoveTrack(sender); err != nil {
 						return true
 					}
@@ -219,9 +261,10 @@ func signalPeerConnections() {
 			for trackID := range trackLocals {
 				if _, ok := existingSenders[trackID]; !ok {
 					if !slices.Contains(undesireableTracks[peerConnections[i].ID], trackID) {
-						if _, err := peerConnections[i].peerConnection.AddTrack(trackLocals[trackID]); err != nil {
+						addTrackforPeer(peerConnections[i], trackID)
+						/*if _, err := peerConnections[i].peerConnection.AddTrack(trackLocals[trackID]); err != nil {
 							return true
-						}
+						}*/
 					}
 				}
 			}
@@ -371,7 +414,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 
-	congestionController, err := cc.NewInterceptor(func() (cc.BandwidthEstimator, error) {
+	/*congestionController, err := cc.NewInterceptor(func() (cc.BandwidthEstimator, error) {
 		return gcc.NewSendSideBWE(gcc.SendSideBWEInitialBitrate(1_000_000))
 	})
 	if err != nil {
@@ -383,7 +426,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		estimatorChan <- estimator
 	})
 
-	interceptorRegistry.Add(congestionController)
+	interceptorRegistry.Add(congestionController)*/
 	if err = webrtc.ConfigureTWCCHeaderExtensionSender(mediaEngine, interceptorRegistry); err != nil {
 		panic(err)
 	}
@@ -427,7 +470,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Add our new PeerConnection to global list
 	listLock.Lock()
-	var pcState = peerConnectionState{peerConnection, webSocketConnection, currentPCID}
+	var pcState = peerConnectionState{peerConnection, webSocketConnection, currentPCID, make(map[string]*webrtc.RTPSender), make([]string, 0)}
 	//pcID += 1
 	peerConnections = append(peerConnections, pcState)
 	//fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: peerConnection \n", pcState.ID)
@@ -518,12 +561,25 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 			if err := peerConnection.SetRemoteDescription(answer); err != nil {
 				panic(err)
 			}
+			for _, c := range pcState.pendingCandidatesString {
+				if candidateErr := peerConnection.AddICECandidate(webrtc.ICECandidateInit{Candidate: c}); candidateErr != nil {
+					panic(candidateErr)
+				}
+			}
 		// candidate
 		case 4:
-			candidate := webrtc.ICECandidateInit{Candidate: message}
+			desc := peerConnection.RemoteDescription()
+			if desc == nil {
+				pcState.pendingCandidatesString = append(pcState.pendingCandidatesString, message)
+			} else {
+				if candidateErr := peerConnection.AddICECandidate(webrtc.ICECandidateInit{Candidate: message}); candidateErr != nil {
+					panic(candidateErr)
+				}
+			}
+			/*candidate := webrtc.ICECandidateInit{Candidate: message}
 			if err := peerConnection.AddICECandidate(candidate); err != nil {
 				panic(err)
-			}
+			}*/
 		// remove track
 		case 5:
 			removeTrackforPeer(pcState, message)
