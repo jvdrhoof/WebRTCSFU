@@ -39,7 +39,8 @@ func main() {
 	useProxyInput := flag.Bool("i", false, "Receive content from the DLL to forward over WebRTC")
 	useProxyOutput := flag.Bool("o", false, "Forward content received over WebRTC to the DLL")
 	clientID = flag.Int("c", 0, "Client ID")
-	numberOfTiles := flag.Int("t", 1, "Number of tiles")
+	nTiles := flag.Int("t", 1, "Number of tiles")
+	nQualities := flag.Int("q", 1, "Number of quality representations")
 	enableDebugF := flag.Bool("d", false, "Enable debug instead of remote tiles")
 	flag.Parse()
 	enableDebug = *enableDebugF
@@ -47,7 +48,7 @@ func main() {
 		println("WebRTCPeer: ERROR: port cannot equal :0")
 		os.Exit(1)
 	}
-	fmt.Printf("WebRTCPeer: Starting client %d with %d tiles\n", *clientID, *numberOfTiles)
+	fmt.Printf("WebRTCPeer: Starting client %d with %d tiles and %d qualities\n", *clientID, *nTiles, *nQualities)
 
 	var transcoder Transcoder
 	if !enableDebug {
@@ -55,7 +56,7 @@ func main() {
 		proxyConn.SetupConnection(*proxyPort)
 
 		if *useProxyInput {
-			proxyConn.StartListening(*numberOfTiles)
+			proxyConn.StartListening(*nTiles * *nQualities)
 			transcoder = NewTranscoderRemote(proxyConn)
 		} else {
 			transcoder = NewTranscoderDummy(proxyConn)
@@ -179,18 +180,20 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	for i := 0; i < *numberOfTiles; i++ {
-		videoTrack, err := NewTrackLocalCloudRTP(codecCapability, fmt.Sprintf("video_%d_%d", *clientID, i), fmt.Sprintf("%d", i))
-		if err != nil {
-			panic(err)
+	for q := 0; q < *nQualities; q++ {
+		for t := 0; t < *nTiles; t++ {
+			videoTrack, err := NewTrackLocalCloudRTP(codecCapability, fmt.Sprintf("video_%d_%d_%d", *clientID, t, q), fmt.Sprintf("%d", q**nTiles+t))
+			if err != nil {
+				panic(err)
+			}
+			videoTracks[q**nTiles+t] = videoTrack
 		}
-		videoTracks[i] = videoTrack
 	}
 
 	if _, err = peerConnection.AddTrack(audioTrack); err != nil {
 		panic(err)
 	}
-	for i := 0; i < *numberOfTiles; i++ {
+	for i := 0; i < *nTiles**nQualities; i++ {
 		if _, err = peerConnection.AddTrack(videoTracks[i]); err != nil {
 			panic(err)
 		}
@@ -218,7 +221,7 @@ func main() {
 	//estimator := <-estimatorChan
 
 	// Create custom websocket handler on SFU address
-	wsHandler := NewWSHandler(*sfuAddress, "/websocket", *numberOfTiles)
+	wsHandler := NewWSHandler(*sfuAddress, "/websocket", *nTiles**nQualities)
 
 	peerConnection.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
@@ -249,9 +252,14 @@ func main() {
 				// Would add small delay but might be more optimal?
 				// Atm audio frame is around 126 bytes so WebRTC overhead might be too much
 				if enableDebug {
+					cc := 0
 					for {
 						audioTrack.WriteAudioFrame([]byte("test"))
+						if cc%100 == 0 {
+							fmt.Printf("WebRTCPeer: [SEND] AUDIO FRAME %d at %d \n", cc, time.Now().UnixMilli())
+						}
 						time.Sleep(30 * time.Millisecond)
+						cc++
 					}
 				} else {
 					for {
@@ -262,13 +270,18 @@ func main() {
 			}()
 			//targetBitrate := uint32(estimator.GetTargetBitrate()) // TODO probably remove this as it currently useless
 			//transcoder.UpdateBitrate(100000000) // and this
-			for i := 0; i < *numberOfTiles; i++ {
+			for i := 0; i < *nTiles**nQualities; i++ {
 				// TODO maybe change writeframe into goroutines?
+				// 0 tile 0 quality 0
+				// 1 tile 1 quality 0
+				// 2 tile 0 quality 1
+				// 3 tile 1 quality 1
 				go func(tileNr int) {
 					cc := 0
 					for {
 						if err = videoTracks[tileNr].WriteFrame(transcoder, uint32(tileNr)); err != nil {
-							//panic(err)
+							fmt.Printf("WebRTCPeer: [SEND] ERROR: Failed to write incoming frame for tile %d (ignoring for now)\n", tileNr)
+							continue
 						}
 						if enableDebug {
 							if cc%100 == 0 {
@@ -281,22 +294,24 @@ func main() {
 				}(i)
 			}
 			go func() {
-				isAdd := false
-				//time.Sleep(10000 * time.Millisecond)
+				decision := 0
+				time.Sleep(5000 * time.Millisecond)
 				otherClientStr := "1"
 				if *clientID == 1 {
 					otherClientStr = "0"
 				}
 				for {
-					if isAdd {
+					if decision == 0 {
 						wsHandler.SendMessage(WebsocketPacket{1, 7, otherClientStr + ",0"})
-						isAdd = false
+						decision = 1
+					} else if decision == 1 {
+						wsHandler.SendMessage(WebsocketPacket{1, 7, otherClientStr + ",1"})
+						decision = -1
 					} else {
-						wsHandler.SendMessage(WebsocketPacket{1, 7, otherClientStr})
-						isAdd = true
+						wsHandler.SendMessage(WebsocketPacket{1, 7, otherClientStr + ",-1"})
+						decision = 0
 					}
-
-					time.Sleep(500 * time.Millisecond)
+					time.Sleep(2000 * time.Millisecond)
 				}
 			}()
 		}
@@ -349,7 +364,11 @@ func main() {
 				}
 
 				frames[p.FrameNr] += p.SeqLen
-				if frames[p.FrameNr] == p.FrameLen && p.FrameNr%100 == 0 {
+				/*if frames[p.FrameNr] == p.FrameLen && p.FrameNr%100 == 0 {
+					fmt.Printf("WebRTCPeer: [VIDEO] Received video frame %d from client %d and tile %d with length %d\n",
+						p.FrameNr, p.ClientNr, p.TileNr, p.FrameLen)
+				}*/
+				if frames[p.FrameNr] == p.FrameLen && p.TileNr == 0 && p.ClientNr == 0 && p.FrameNr%10 == 0 {
 					fmt.Printf("WebRTCPeer: [VIDEO] Received video frame %d from client %d and tile %d with length %d\n",
 						p.FrameNr, p.ClientNr, p.TileNr, p.FrameLen)
 				}
@@ -550,7 +569,7 @@ func (s *TrackLocalCloudRTP) WriteFrame(t Transcoder, tile uint32) error {
 	samples := uint32(1 * clockRate)
 	var data []byte
 	if enableDebug {
-		data = make([]byte, 50000)
+		data = make([]byte, 50)
 	} else {
 		data = t.EncodeFrame(tile)
 	}
