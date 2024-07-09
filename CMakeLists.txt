@@ -7,6 +7,12 @@ project(WebRTCSFU Go)
 include(cmake/golang.cmake)
 include(cmake/flags.cmake)
 
+if(APPLE)
+    # go compiler does not like to build universal binaries.
+    # so for use on the Mac we always build Intel
+    set(CMAKE_GO_GOARCH "amd64")
+endif()
+
 add_subdirectory(sfu)
 add_subdirectory(peer)
 
