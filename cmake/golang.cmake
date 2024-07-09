@@ -6,11 +6,19 @@ function(ExternalGoProject_Add TARG)
 endfunction(ExternalGoProject_Add)
 
 function(add_go_executable NAME)
-  set(SUFFIXEDNAME ${NAME}${CMAKE_EXECUTABLE_SUFFIX})
+  set(SUFFIXEDNAME "${NAME}${CMAKE_EXECUTABLE_SUFFIX}")
   file(GLOB GO_SOURCE RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "*.go")
+  set(optEnvArch "")
+  if(CMAKE_GO_GOARCH)
+    set(optEnvArch "GOARCH=${CMAKE_GO_GOARCH}")
+  endif()
+  set(optEnvOs "")
+  if(CMAKE_GO_GOOS)
+    set(optEnvOs "GOOS=${CMAKE_GO_GOOS}")
+  endif()
   add_custom_command(
     OUTPUT ${OUTPUT_DIR}/.timestamp 
-    COMMAND ${CMAKE_COMMAND} -E env GOPATH=${GOPATH} ${CMAKE_Go_COMPILER} build -o "${CMAKE_CURRENT_BINARY_DIR}/${SUFFIXEDNAME}" ${CMAKE_GO_FLAGS} ${GO_SOURCE}
+    COMMAND ${CMAKE_COMMAND} -E env GOPATH=${GOPATH} ${optEnvArch} ${optEnvOs} ${CMAKE_Go_COMPILER} build -o "${CMAKE_CURRENT_BINARY_DIR}/${SUFFIXEDNAME}" ${CMAKE_GO_FLAGS} ${GO_SOURCE}
     WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
     )
 
@@ -18,7 +26,7 @@ function(add_go_executable NAME)
   install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/${SUFFIXEDNAME} DESTINATION bin)
 endfunction(add_go_executable)
 
-
+# Note by Jack: this doesn't necessarily install to the right place.
 function(ADD_GO_LIBRARY NAME BUILD_TYPE)
   if(BUILD_TYPE STREQUAL "STATIC")
     set(BUILD_MODE -buildmode=c-archive)
@@ -27,6 +35,8 @@ function(ADD_GO_LIBRARY NAME BUILD_TYPE)
     set(BUILD_MODE -buildmode=c-shared)
     if(APPLE)
       set(LIB_NAME "lib${NAME}.dylib")
+    elif(WIN32)
+      set(LIB_NAME "${NAME}.dll")
     else()
       set(LIB_NAME "lib${NAME}.so")
     endif()
