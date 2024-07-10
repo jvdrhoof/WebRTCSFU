@@ -1,0 +1,123 @@
+# This workflow will build a golang project
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
+
+name: Go
+
+on:
+  push:
+    branches: [ "master", "2-github-actions" ]
+    tags: ["*"]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build_matrix:
+    strategy:
+      matrix:
+        include:
+            - os: ubuntu-latest
+              TARGET: x86_64-unknown-linux
+            - os: macos-latest
+              TARGET: x86_64-apple-darwin
+            - os: windows-latest
+              TARGET: x86_64-unknown-windows
+    runs-on: ${{ matrix.os }}
+    steps:
+    
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.20'
+
+    - name: Build & Test
+      uses: ashutoshvarma/action-cmake-build@master
+      with:
+        build-dir: ${{ runner.workspace }}/build
+        build-type: Release
+        configure-options: -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/installed
+        install-build: true
+          
+    - name: Capture installed folder
+      shell: bash
+      run: |
+            tar -c -v -f webrtcsfu-${{ matrix.TARGET }}.tgz -z -C installed .
+
+    - name: Upload installed folder
+      uses: actions/upload-artifact@v4
+      with:
+        name: webrtcsfu-${{ matrix.TARGET }}.tgz
+        path: webrtcsfu-${{ matrix.TARGET }}.tgz
+        
+  create-release:
+        if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
+        name: create-release
+        runs-on: ubuntu-latest
+        needs:
+            - build_matrix
+        steps:
+
+        - name: Download Windows installed folder
+          uses: actions/download-artifact@v4
+          with:
+                name: webrtcsfu-x86_64-unknown-windows.tgz
+                path: ../Assets/
+        - name: Download MacOS installed folder
+          uses: actions/download-artifact@v4
+          with:
+                name: webrtcsfu-x86_64-apple-darwin.tgz
+                path: ../Assets/
+        - name: Download Linux installed folder
+          uses: actions/download-artifact@v4
+          with:
+                name: webrtcsfu-x86_64-unknown-linux.tgz
+                path: ../Assets/
+
+        - name: Check what is there
+          shell: bash
+          run: ls -l . ../Assets
+        - name: Create Release
+          uses: actions/create-release@v1
+          id: create_release
+          env:
+            GITHUB_TOKEN: ${{ github.token }}
+          with:
+                draft: false
+                prerelease: true
+                release_name: ${{ github.ref }}
+                tag_name: ${{ github.ref }}
+                body:
+                  Automatic release
+
+        - name: Upload Windows installed folder
+          uses: actions/upload-release-asset@v1
+          env:
+            GITHUB_TOKEN: ${{ github.token }}
+          with:
+            upload_url: ${{ steps.create_release.outputs.upload_url }}
+            asset_path: ../Assets/webrtcsfu-x86_64-unknown-windows.tgz
+            asset_name: webrtcsfu-x86_64-unknown-windows.tgz
+            asset_content_type: application/zip
+        
+        - name: Upload MacOS installed folder
+          uses: actions/upload-release-asset@v1
+          env:
+            GITHUB_TOKEN: ${{ github.token }}
+          with:
+            upload_url: ${{ steps.create_release.outputs.upload_url }}
+            asset_path: ../Assets/webrtcsfu-x86_64-apple-darwin.tgz
+            asset_name: webrtcsfu-x86_64-apple-darwin.tgz
+            asset_content_type: application/gzip
+        
+        - name: Upload Linux installed folder
+          uses: actions/upload-release-asset@v1
+          env:
+            GITHUB_TOKEN: ${{ github.token }}
+          with:
+            upload_url: ${{ steps.create_release.outputs.upload_url }}
+            asset_path: ../Assets/webrtcsfu-x86_64-unknown-linux.tgz
+            asset_name: webrtcsfu-x86_64-unknown-linux.tgz
+            asset_content_type: application/gzip
+
