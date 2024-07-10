@@ -13,8 +13,8 @@ import (
 const (
 	ReadyPacketType   uint32 = 0
 	TilePacketType    uint32 = 1
-	ControlPacketType uint32 = 3
 	AudioPacketType   uint32 = 2
+	ControlPacketType uint32 = 3
 )
 
 // TODO seperate this into different struct. We also want to use packet type for control packets (i.e. fov)
