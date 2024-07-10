@@ -294,9 +294,9 @@ func main() {
 				}(i)
 				//time.Sleep(2 * time.Second)
 			}
-			go func() {
-				decision := 0
-				time.Sleep(5000 * time.Millisecond)
+			/* go func() {
+				isAdd := false
+				//time.Sleep(10000 * time.Millisecond)
 				otherClientStr := "1"
 				if *clientID == 1 {
 					otherClientStr = "0"
@@ -314,7 +314,7 @@ func main() {
 					}
 					time.Sleep(2000 * time.Millisecond)
 				}
-			}()
+			}() */
 		}
 	})
 
