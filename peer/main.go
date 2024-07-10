@@ -280,7 +280,7 @@ func main() {
 					}
 				}(i)
 			}
-			go func() {
+			/* go func() {
 				isAdd := false
 				//time.Sleep(10000 * time.Millisecond)
 				otherClientStr := "1"
@@ -298,7 +298,7 @@ func main() {
 
 					time.Sleep(500 * time.Millisecond)
 				}
-			}()
+			}() */
 		}
 	})
 
