@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/pion/interceptor"
-	"github.com/pion/interceptor/pkg/nack"
 	"github.com/pion/interceptor/pkg/twcc"
 	"github.com/pion/rtp"
 	"github.com/pion/sdp/v3"
@@ -116,7 +115,7 @@ func main() {
 	}*/
 
 	m.RegisterFeedback(webrtc.RTCPFeedback{Type: "nack"}, webrtc.RTPCodecTypeVideo)
-	m.RegisterFeedback(webrtc.RTCPFeedback{Type: "nack", Parameter: "pli"}, webrtc.RTPCodecTypeVideo)
+	//m.RegisterFeedback(webrtc.RTCPFeedback{Type: "nack", Parameter: "pli"}, webrtc.RTPCodecTypeVideo)
 
 	/*estimatorChan := make(chan cc.BandwidthEstimator, 1)
 	congestionController.OnNewPeerConnection(func(id string, estimator cc.BandwidthEstimator) {
@@ -128,8 +127,8 @@ func main() {
 		panic(err)
 	}
 
-	responder, _ := nack.NewResponderInterceptor()
-	i.Add(responder)
+	//responder, _ := nack.NewResponderInterceptor()
+	//i.Add(responder)
 
 	m.RegisterFeedback(webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBTransportCC}, webrtc.RTPCodecTypeVideo)
 	if err := m.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: sdp.TransportCCURI}, webrtc.RTPCodecTypeVideo); err != nil {
@@ -147,8 +146,8 @@ func main() {
 	}
 	i.Add(generator)
 
-	nackGenerator, _ := nack.NewGeneratorInterceptor()
-	i.Add(nackGenerator)
+	//nackGenerator, _ := nack.NewGeneratorInterceptor()
+	//i.Add(nackGenerator)
 
 	var candidatesMux sync.Mutex
 	pendingCandidates := make([]*webrtc.ICECandidate, 0)
@@ -254,9 +253,9 @@ func main() {
 				if enableDebug {
 					cc := 0
 					for {
-						audioTrack.WriteAudioFrame([]byte("test"))
+						//	audioTrack.WriteAudioFrame([]byte("test"))
 						if cc%100 == 0 {
-							fmt.Printf("WebRTCPeer: [SEND] AUDIO FRAME %d at %d \n", cc, time.Now().UnixMilli())
+							//fmt.Printf("WebRTCPeer: [SEND] AUDIO FRAME %d at %d \n", cc, time.Now().UnixMilli())
 						}
 						time.Sleep(30 * time.Millisecond)
 						cc++
@@ -285,13 +284,15 @@ func main() {
 						}
 						if enableDebug {
 							if cc%100 == 0 {
-								fmt.Printf("WebRTCPeer: [SEND] FRAME %d at %d \n", cc, time.Now().UnixMilli())
+								//fmt.Printf("WebRTCPeer: [SEND] FRAME %d at %d \n", cc, time.Now().UnixMilli())
 							}
 							cc++
 							time.Sleep(30 * time.Millisecond)
 						}
 					}
+
 				}(i)
+				//time.Sleep(2 * time.Second)
 			}
 			go func() {
 				decision := 0
@@ -321,6 +322,7 @@ func main() {
 		fmt.Printf("WebRTCPeer: MIME type %s\n", track.Codec().MimeType)
 		fmt.Printf("WebRTCPeer: Payload type %d\n", track.PayloadType())
 		fmt.Printf("WebRTCPeer: Track SSRC %d\n", track.SSRC())
+
 		// TODO: check the puprose of this code fragment
 		// Currently this removes stuff like audio_1 (audio track second client) and video_X_1 (second tile for user X)?
 		//if track.ID()[len(track.ID())-1] == '1' && track.Kind() == webrtc.RTPCodecTypeVideo {
@@ -364,14 +366,15 @@ func main() {
 				}
 
 				frames[p.FrameNr] += p.SeqLen
-				/*if frames[p.FrameNr] == p.FrameLen && p.FrameNr%100 == 0 {
-					fmt.Printf("WebRTCPeer: [VIDEO] Received video frame %d from client %d and tile %d with length %d\n",
-						p.FrameNr, p.ClientNr, p.TileNr, p.FrameLen)
-				}*/
-				if frames[p.FrameNr] == p.FrameLen && p.TileNr == 0 && p.ClientNr == 0 && p.FrameNr%10 == 0 {
-					fmt.Printf("WebRTCPeer: [VIDEO] Received video frame %d from client %d and tile %d with length %d\n",
-						p.FrameNr, p.ClientNr, p.TileNr, p.FrameLen)
+				if frames[p.FrameNr] == p.FrameLen && p.FrameNr%1 == 0 {
+					fmt.Printf("WebRTCPeer: [VIDEO] Received video frame %d from client %d and tile %d with length %d at %d\n",
+						p.FrameNr, p.ClientNr, p.TileNr, p.FrameLen, time.Now().UnixMilli())
+					frames[p.FrameNr] = 0
 				}
+				//	if frames[p.FrameNr] == p.FrameLen && p.TileNr == 0 && p.ClientNr == 0 && p.FrameNr%10 == 0 {
+				//		fmt.Printf("WebRTCPeer: [VIDEO] Received video frame %d from client %d and tile %d with length %d\n",
+				//			p.FrameNr, p.ClientNr, p.TileNr, p.FrameLen)
+				//	}
 
 			} else {
 				bufBinary := bytes.NewBuffer(buf[20:])

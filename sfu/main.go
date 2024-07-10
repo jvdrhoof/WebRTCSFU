@@ -123,7 +123,7 @@ func addQualityTrack(pcState *peerConnectionState, t *webrtc.TrackLocalStaticRTP
 		qualitiesLock.Unlock()
 	}()
 
-	if trackQualities[newID] == nil {
+	if _, exists := trackQualities[newID]; !exists {
 		trackQualities[newID] = make(map[int]*webrtc.TrackLocalStaticRTP)
 		trackQualities[newID][-1] = nil
 	}
@@ -131,7 +131,7 @@ func addQualityTrack(pcState *peerConnectionState, t *webrtc.TrackLocalStaticRTP
 }
 
 // Add a new listening track for either a video tile (initially at quality 0) or audio
-func addNewTrackforPeer(pcState peerConnectionState, trackID string) {
+func addNewTrackforPeer(pcState *peerConnectionState, trackID string) {
 	v := strings.Split(string(trackID), "_")
 	if v[0] == "audio" {
 		trackLocal := trackLocals[trackID]
@@ -158,34 +158,40 @@ func addNewTrackforPeer(pcState peerConnectionState, trackID string) {
 }
 
 // Change the quality representation at which to retrieve a video tile
-func setTrackQuality(pcState peerConnectionState, trackID string, quality int) {
+func setTrackQuality(pcState *peerConnectionState, trackID string, quality int) {
 	qualitiesLock.Lock()
-
-	fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Implementing decision for trackID %s to use quality %d\n", pcState.ID, trackID, quality)
+	listLock.Lock()
+	//fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Implementing decision for trackID %s to use quality %d\n", pcState.ID, trackID, quality)
 
 	defer func() {
 		qualitiesLock.Unlock()
+		listLock.Unlock()
 	}()
 
 	if oldQuality, keyExists := pcState.qualityDecisions[trackID]; keyExists {
 		if oldQuality != quality {
-			fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: old quality %d differs from requested quality %d\n", pcState.ID, oldQuality, quality)
+			//fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: old quality %d differs from requested quality %d\n", pcState.ID, oldQuality, quality)
 			trackQuality := trackQualities[trackID][quality]
-			fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Received correct quality track\n", pcState.ID)
+			//fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Received correct quality track\n", pcState.ID)
 			if rtpSender, keyExists := pcState.trackRTPSenders[trackID]; keyExists {
 				if rtpSender == nil {
 					fmt.Printf("WebRTCSFU: [Client #%d] rtpSender NIL\n", pcState.ID)
 				}
 				if trackQuality == nil {
+					//if pcState.ID == 0 {
 					fmt.Printf("WebRTCSFU: [Client #%d] trackQuality NIL\n", pcState.ID)
 					fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Replacing track with NIL\n", pcState.ID)
+					//}
+
 					rtpSender.ReplaceTrack(nil)
 				} else {
-					fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Replacing track with new track ID %s StreamID %s\n", pcState.ID, trackQuality.ID(), trackQuality.StreamID())
+					//if pcState.ID == 0 {
+					fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Replacing track with new track ID %s StreamID %s %d\n", pcState.ID, trackQuality.ID(), trackQuality.StreamID(), quality)
+					//}
 					rtpSender.ReplaceTrack(trackQuality)
 				}
 			}
-			fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Updating quality decision to %d\n", pcState.ID, quality)
+			//fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Updating quality decision to %d\n", pcState.ID, quality)
 			pcState.qualityDecisions[trackID] = quality
 		}
 	} else {
@@ -257,7 +263,7 @@ func signalPeerConnections() {
 			// Add all tracks we aren't sending yet to the PeerConnection
 			for trackID := range trackLocals {
 				if _, ok := existingSenders[trackID]; !ok {
-					addNewTrackforPeer(peerConnections[i], trackID)
+					addNewTrackforPeer(&peerConnections[i], trackID)
 				}
 			}
 
@@ -389,11 +395,14 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mediaEngine.RegisterFeedback(webrtc.RTCPFeedback{Type: "nack"}, webrtc.RTPCodecTypeVideo)
-	mediaEngine.RegisterFeedback(webrtc.RTCPFeedback{Type: "nack", Parameter: "pli"}, webrtc.RTPCodecTypeVideo)
+	//mediaEngine.RegisterFeedback(webrtc.RTCPFeedback{Type: "nack", Parameter: "pli"}, webrtc.RTPCodecTypeVideo)
 	mediaEngine.RegisterFeedback(webrtc.RTCPFeedback{Type: webrtc.TypeRTCPFBTransportCC}, webrtc.RTPCodecTypeVideo)
 	if err := mediaEngine.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: sdp.TransportCCURI}, webrtc.RTPCodecTypeVideo); err != nil {
 		panic(err)
 	}
+
+	trackMerger, _ := NewTrackMergerInterceptor()
+	interceptorRegistry.Add(trackMerger)
 
 	/*congestionController, err := cc.NewInterceptor(func() (cc.BandwidthEstimator, error) {
 		return gcc.NewSendSideBWE(gcc.SendSideBWEInitialBitrate(1_000_000))
@@ -416,7 +425,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 
-	peerConnection, err := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine), webrtc.WithMediaEngine(mediaEngine)).NewPeerConnection(webrtc.Configuration{})
+	peerConnection, err := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine), webrtc.WithMediaEngine(mediaEngine), webrtc.WithInterceptorRegistry(interceptorRegistry)).NewPeerConnection(webrtc.Configuration{})
 	// peerConnection, err := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine), webrtc.WithInterceptorRegistry(interceptorRegistry), webrtc.WithMediaEngine(mediaEngine)).NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		panic(err)
@@ -447,6 +456,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: ERROR: %s when adding video transceiver\n", currentPCID, err)
 			return
 		}
+
 	}
 
 	fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Waiting for lock to add connection to connection list\n", currentPCID)
@@ -553,7 +563,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 
 			i, _, err := t.Read(buf)
 			if isPrint {
-				println("test")
+				//println("test")
 			}
 			if err != nil {
 				fmt.Printf("WebRTCSFU: [Client #%d] OnTrack: Track %s error during read: %s\n", pcState.ID, trackLocal.ID(), err)
@@ -615,7 +625,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 						fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: %s cannot be converted to an integer\n", pcState.ID, sQuality)
 						continue
 					}
-					setTrackQuality(pcState, trackID, quality)
+					setTrackQuality(&pcState, trackID, quality)
 				}
 			}
 		}
