@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -185,7 +184,7 @@ func main() {
 	videoTracks := map[VideoKey]*TrackLocalCloudRTP{}
 	for t := 0; t < *nTiles; t++ {
 		for q := 0; q < *nQualities; q++ {
-			videoTrack, err := NewTrackLocalCloudRTP(codecCapability, fmt.Sprintf("video_%d_%d_%d", *clientID, t, q), fmt.Sprintf("%d", q**nTiles+t))
+			videoTrack, err := NewTrackLocalCloudRTP(codecCapability, fmt.Sprintf("video_%d_%d_%d", *clientID, t, q), fmt.Sprintf("%d", q**nTiles+t), uint32(t), uint32(q))
 			if err != nil {
 				panic(err)
 			}
@@ -483,16 +482,21 @@ type TrackLocalCloudRTP struct {
 	sequencer  rtp.Sequencer
 	rtpTrack   *webrtc.TrackLocalStaticRTP
 	clockRate  float64
+
+	tileNr  uint32
+	quality uint32
 }
 
 // NewTrackLocalStaticSample returns a TrackLocalStaticSample
-func NewTrackLocalCloudRTP(c webrtc.RTPCodecCapability, id, streamID string, options ...func(*webrtc.TrackLocalStaticRTP)) (*TrackLocalCloudRTP, error) {
+func NewTrackLocalCloudRTP(c webrtc.RTPCodecCapability, id, streamID string, tileNr uint32, quality uint32, options ...func(*webrtc.TrackLocalStaticRTP)) (*TrackLocalCloudRTP, error) {
 	rtpTrack, err := webrtc.NewTrackLocalStaticRTP(c, id, streamID, options...)
 	if err != nil {
 		return nil, err
 	}
 	return &TrackLocalCloudRTP{
 		rtpTrack: rtpTrack,
+		tileNr:   tileNr,
+		quality:  quality,
 	}, nil
 }
 
@@ -509,15 +513,12 @@ func (s *TrackLocalCloudRTP) Bind(t webrtc.TrackLocalContext) (webrtc.RTPCodecPa
 		return codec, nil
 	}
 	s.sequencer = rtp.NewRandomSequencer()
-	ui64, err := strconv.ParseUint(s.StreamID(), 10, 64)
-	if err != nil {
-		panic(err)
-	}
+
 	s.packetizer = rtp.NewPacketizer(
 		1200, // Not MTU but ok
 		0,    // Value is handled when writing
 		0,    // Value is handled when writing
-		NewPointCloudPayloader(uint32(ui64), uint32(ui64)),
+		NewPointCloudPayloader(s.tileNr, s.quality),
 		s.sequencer,
 		codec.ClockRate,
 	)

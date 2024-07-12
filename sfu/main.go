@@ -309,6 +309,14 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 			numberOfTiles = i
 		}
 	}
+	numberOfQualities := 1
+	numberOfQualitiesS := r.URL.Query().Get("nqualities")
+	if numberOfQualitiesS != "" {
+		i, err := strconv.Atoi(numberOfQualitiesS)
+		if err == nil {
+			numberOfQualities = i
+		}
+	}
 	listLock.Lock()
 	currentPCID := pcID
 	pcID++
@@ -432,7 +440,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Iterating and adding %d video tracks\n", currentPCID, numberOfTiles)
-	for i := 0; i < numberOfTiles; i++ {
+	for i := 0; i < numberOfTiles*numberOfQualities; i++ {
 		if _, err := peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo, webrtc.RTPTransceiverInit{
 			Direction: webrtc.RTPTransceiverDirectionRecvonly,
 		}); err != nil {
