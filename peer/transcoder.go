@@ -3,7 +3,7 @@ package main
 type Transcoder interface {
 	UpdateBitrate(bitrate uint32)
 	UpdateProjection()
-	EncodeFrame(uint32) []byte
+	EncodeFrame(uint32, uint32) []byte
 }
 
 type TranscoderRemote struct {
@@ -24,8 +24,8 @@ func (t *TranscoderRemote) UpdateProjection() {
 	// Do nothing
 }
 
-func (t *TranscoderRemote) EncodeFrame(tile uint32) []byte {
-	return proxyConn.NextTile(tile)
+func (t *TranscoderRemote) EncodeFrame(tile uint32, quality uint32) []byte {
+	return proxyConn.NextTile(tile, quality)
 }
 
 type TranscoderDummy struct {
@@ -46,6 +46,6 @@ func (t *TranscoderDummy) UpdateProjection() {
 	// Do nothing
 }
 
-func (t *TranscoderDummy) EncodeFrame(tile uint32) []byte {
+func (t *TranscoderDummy) EncodeFrame(tile uint32, quality uint32) []byte {
 	return nil
 }
