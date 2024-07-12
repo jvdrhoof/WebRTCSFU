@@ -282,7 +282,7 @@ func main() {
 							}
 							if enableDebug {
 								if cc%100 == 0 {
-									fmt.Printf("WebRTCPeer: [SEND] FRAME %d belonging to tile %d and quality %d \n", cc, tileNr, quality)
+									fmt.Printf("WebRTCPeer: [SEND] VIDEO FRAME %d belonging to tile %d and quality %d \n", cc, tileNr, quality)
 								}
 								time.Sleep(30 * time.Millisecond)
 								cc++
@@ -291,28 +291,34 @@ func main() {
 					}(t, q)
 				}
 			}
-			// The following code can be used to test the SFU's ability to change the quality of outgoing tracks
-			/* go func() {
-				isAdd := false
-				//time.Sleep(10000 * time.Millisecond)
-				otherClientStr := "1"
-				if *clientID == 1 {
-					otherClientStr = "0"
-				}
-				for {
-					if decision == 0 {
-						wsHandler.SendMessage(WebsocketPacket{1, 7, otherClientStr + ",0"})
-						decision = 1
-					} else if decision == 1 {
-						wsHandler.SendMessage(WebsocketPacket{1, 7, otherClientStr + ",1"})
-						decision = -1
-					} else {
-						wsHandler.SendMessage(WebsocketPacket{1, 7, otherClientStr + ",-1"})
-						decision = 0
+
+			if enableDebug {
+				// The following code is used to test the SFU's ability to change the quality of outgoing tracks
+				go func() {
+					decision := 0
+					time.Sleep(4000 * time.Millisecond)
+					otherClientStr := "1"
+					if *clientID == 1 {
+						otherClientStr = "0"
 					}
-					time.Sleep(2000 * time.Millisecond)
-				}
-			}() */
+					for {
+						if decision == 0 {
+							wsHandler.SendMessage(WebsocketPacket{1, 7, otherClientStr + ",0"})
+							decision = 1
+						} else if decision == 1 {
+							wsHandler.SendMessage(WebsocketPacket{1, 7, otherClientStr + ",1"})
+							decision = 2
+						} else if decision == 2 {
+							wsHandler.SendMessage(WebsocketPacket{1, 7, otherClientStr + ",1"})
+							decision = -1
+						} else {
+							wsHandler.SendMessage(WebsocketPacket{1, 7, otherClientStr + ",-1"})
+							decision = 0
+						}
+						time.Sleep(2000 * time.Millisecond)
+					}
+				}()
+			}
 		}
 	})
 
@@ -320,6 +326,7 @@ func main() {
 		fmt.Printf("WebRTCPeer: MIME type %s\n", track.Codec().MimeType)
 		fmt.Printf("WebRTCPeer: Payload type %d\n", track.PayloadType())
 		fmt.Printf("WebRTCPeer: Track SSRC %d\n", track.SSRC())
+		fmt.Printf("WebRTCPeer: Track with ID %s, StreamID %s\n", track.ID(), track.StreamID())
 		codecName := strings.Split(track.Codec().RTPCodecCapability.MimeType, "/")
 		fmt.Printf("WebRTCPeer: Track of type %d has started: %s\n", track.PayloadType(), codecName)
 		// Create buffer to receive incoming track data, using 1300 bytes - header bytes
@@ -351,9 +358,13 @@ func main() {
 					panic(err)
 				}
 				frames[p.FrameNr] += p.SeqLen
-				if frames[p.FrameNr] == p.FrameLen && p.FrameNr%100 == 0 {
-					fmt.Printf("WebRTCPeer: [VIDEO] Received video frame %d from client %d and tile %d with length %d at %d\n",
-						p.FrameNr, p.ClientNr, p.TileNr, p.FrameLen, time.Now().UnixMilli())
+				packet_modulo := 100
+				if enableDebug {
+					packet_modulo = 1
+				}
+				if frames[p.FrameNr] == p.FrameLen && p.FrameNr%uint32(packet_modulo) == 0 {
+					fmt.Printf("WebRTCPeer: [VIDEO] Received video frame %d from client %d and tile %d at quality %d with length %d\n",
+						p.FrameNr, p.ClientNr, p.TileNr, p.Quality, p.FrameLen)
 					frames[p.FrameNr] = 0
 				}
 			} else {
@@ -606,6 +617,7 @@ func (p *PointCloudPayloader) Payload(mtu uint16, payload []byte) (payloads [][]
 }
 
 func NewPointCloudPayloader(tile uint32, quality uint32) *PointCloudPayloader {
+	fmt.Printf("WebRTCPeer: NewPointCloudPayloader: tile %d, quality %d\n", tile, quality)
 	return &PointCloudPayloader{0, tile, quality}
 }
 

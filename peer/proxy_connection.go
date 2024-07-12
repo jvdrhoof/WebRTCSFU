@@ -238,7 +238,6 @@ func (pc *ProxyConnection) StartListening(nTiles int, nQualities int) {
 				}
 				pc.mtx_audio.Unlock()
 			}
-
 		}
 	}()
 }

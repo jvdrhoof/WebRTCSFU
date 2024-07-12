@@ -169,21 +169,24 @@ func setTrackQuality(pcState *peerConnectionState, trackID string, quality int) 
 
 	if oldQuality, keyExists := pcState.qualityDecisions[trackID]; keyExists {
 		if oldQuality != quality {
-			fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Implementing decision for trackID %s to use quality %d instead of quality %d\n", pcState.ID, trackID, quality, oldQuality)
+			fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Trying to adopt the decision for trackID %s to use quality %d instead of quality %d\n", pcState.ID, trackID, quality, oldQuality)
 			if rtpSender, keyExists := pcState.trackRTPSenders[trackID]; keyExists {
 				if quality < 0 {
 					fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Replacing track with NIL\n", pcState.ID)
 					rtpSender.ReplaceTrack(nil)
 				} else {
-					trackQuality := trackQualities[trackID][quality]
-					fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Replacing track with trackID %s with updated quality %d\n", pcState.ID, trackQuality.ID(), quality)
-					rtpSender.ReplaceTrack(trackQuality)
+					if trackQuality, keyExists := trackQualities[trackID][quality]; keyExists {
+						fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Replacing track with trackID %s with updated quality %d\n", pcState.ID, trackQuality.ID(), quality)
+						rtpSender.ReplaceTrack(trackQuality)
+					} else {
+						fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: quality %d not found in map trackQualities[trackID], leaving track set to quality %d\n", pcState.ID, quality, oldQuality)
+					}
 				}
 			}
 			pcState.qualityDecisions[trackID] = quality
 		}
 	} else {
-		fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: trackID %s not found in map qualityDecisions\n", pcState.ID, trackID)
+		fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: trackID %s not found in map qualityDecisions, leaving quality unchanged\n", pcState.ID, trackID)
 	}
 }
 
