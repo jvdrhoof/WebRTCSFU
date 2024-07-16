@@ -27,6 +27,7 @@ const (
 	Finished int = 5
 )
 
+var logger *Logger
 var proxyConn *ProxyConnection
 var clientID *int
 var enableDebug bool
@@ -40,13 +41,18 @@ func main() {
 	nTiles := flag.Int("t", 1, "Number of tiles")
 	nQualities := flag.Int("q", 1, "Number of quality representations")
 	enableDebugF := flag.Bool("d", false, "Enable debug instead of remote tiles")
+	logLevel := flag.Int("l", LevelDefault, "Log level (0: default, 1: verbose, 2: debug)")
 	flag.Parse()
+
 	enableDebug = *enableDebugF
+
+	logger = NewLogger(*logLevel)
+
 	if *proxyPort == ":0" && !enableDebug {
-		println("WebRTCPeer: ERROR: port cannot equal :0")
+		logger.Error("Port cannot equal :0")
 		os.Exit(1)
 	}
-	fmt.Printf("WebRTCPeer: Starting client %d with %d tiles and %d qualities\n", *clientID, *nTiles, *nQualities)
+	logger.Log(fmt.Sprintf("Starting client %d with %d tiles and %d qualities\n", *clientID, *nTiles, *nQualities), LevelDefault)
 
 	var transcoder Transcoder
 	if !enableDebug {
@@ -63,7 +69,8 @@ func main() {
 
 	settingEngine := webrtc.SettingEngine{}
 	settingEngine.SetSCTPMaxReceiveBufferSize(16 * 1024 * 1024)
-	//settingEngine.SetDTLSCustomerCipherSuites()
+	// TODO: When to use custom cipher suites?
+	// settingEngine.SetDTLSCustomerCipherSuites()
 	i := &interceptor.Registry{}
 	m := &webrtc.MediaEngine{}
 	if err := m.RegisterDefaultCodecs(); err != nil {
@@ -210,7 +217,7 @@ func main() {
 
 	defer func() {
 		if cErr := peerConnection.Close(); cErr != nil {
-			fmt.Printf("WebRTCPeer: Cannot close peer connection: %v\n", cErr)
+			logger.Error(fmt.Sprintf("Cannot close peer connection: %v\n", cErr))
 		}
 	}()
 
@@ -235,9 +242,10 @@ func main() {
 	})
 
 	peerConnection.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-		fmt.Printf("WebRTCPeer: Peer connection state has changed: %s\n", s.String())
+		logger.Log(fmt.Sprintf("Peer connection state has changed: %s\n", s.String()), LevelDebug)
+
 		if s == webrtc.PeerConnectionStateFailed {
-			fmt.Println("WebRTCPeer: Peer connection failed, exiting")
+			logger.Error("Peer connection failed, exiting")
 			os.Exit(0)
 		} else if s == webrtc.PeerConnectionStateConnected {
 			// TODO Combine both write operations into one loop
@@ -252,7 +260,7 @@ func main() {
 					for {
 						audioTrack.WriteAudioFrame([]byte("test"))
 						if cc%100 == 0 {
-							fmt.Printf("WebRTCPeer: [SEND] AUDIO FRAME %d\n", cc)
+							logger.Log(fmt.Sprintf("[SEND] Audio frame %d\n", cc), LevelDebug)
 						}
 						time.Sleep(30 * time.Millisecond)
 						cc++
@@ -276,12 +284,12 @@ func main() {
 						cc := 0
 						for {
 							if err = videoTracks[VideoKey{uint32(tileNr), uint32(quality)}].WriteFrame(transcoder, uint32(tileNr), uint32(quality)); err != nil {
-								fmt.Printf("WebRTCPeer: [SEND] ERROR: Failed to write incoming frame for tile %d and quality %d (ignoring for now)\n", tileNr, quality)
+								logger.Error(fmt.Sprintf("[SEND] Failed to write incoming frame for tile %d and quality %d (ignoring for now)\n", tileNr, quality))
 								continue
 							}
 							if enableDebug {
 								if cc%100 == 0 {
-									fmt.Printf("WebRTCPeer: [SEND] VIDEO FRAME %d belonging to tile %d and quality %d \n", cc, tileNr, quality)
+									logger.Log(fmt.Sprintf("[SEND] Video frame %d belonging to tile %d and quality\n", tileNr, quality), LevelDebug)
 								}
 								time.Sleep(30 * time.Millisecond)
 								cc++
@@ -322,12 +330,11 @@ func main() {
 	})
 
 	peerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		fmt.Printf("WebRTCPeer: MIME type %s\n", track.Codec().MimeType)
-		fmt.Printf("WebRTCPeer: Payload type %d\n", track.PayloadType())
-		fmt.Printf("WebRTCPeer: Track SSRC %d\n", track.SSRC())
-		fmt.Printf("WebRTCPeer: Track with ID %s, StreamID %s\n", track.ID(), track.StreamID())
+
+		logger.Log(fmt.Sprintf("MIME type %s, payload type %d, track SSRC %d, track ID %s, track StreamID %s\n", track.Codec().MimeType, track.PayloadType(), track.SSRC(), track.ID(), track.StreamID()), LevelVerbose)
 		codecName := strings.Split(track.Codec().RTPCodecCapability.MimeType, "/")
-		fmt.Printf("WebRTCPeer: Track of type %d has started: %s\n", track.PayloadType(), codecName)
+		logger.Log(fmt.Sprintf("Track of type %d has started with codec %s\n", track.PayloadType(), codecName), LevelVerbose)
+
 		// Create buffer to receive incoming track data, using 1300 bytes - header bytes
 		// TODO is different for audio
 		buf := make([]byte, BufferLength)
@@ -337,7 +344,7 @@ func main() {
 		for {
 			_, _, readErr := track.Read(buf)
 			if readErr != nil {
-				fmt.Printf("WebRTCPeer: Can no longer read from track %s, terminating %s\n", track.ID(), readErr.Error())
+				logger.Error(fmt.Sprintf("Can no longer read from track %s, terminating %s\n", track.ID(), readErr.Error()))
 				break
 			}
 			if *useProxyOutput {
@@ -360,17 +367,13 @@ func main() {
 
 				// Uncomment to debug the actual content of packets
 				/* if frames[p.FrameNr] == 0 {
-					fmt.Printf("WebRTCPeer: [VIDEO] Bytes with total payload %v \n", buf[48:])
+					logger.Log(fmt.Sprintf("[Video] Bytes with total payload %v\n", buf[48:]), LevelDebug)
 				} */
 
 				frames[p.FrameNr] += p.SeqLen
-				packet_modulo := 100
-				if enableDebug {
-					packet_modulo = 1
-				}
-				if frames[p.FrameNr] == p.FrameLen && p.FrameNr%uint32(packet_modulo) == 0 {
-					fmt.Printf("WebRTCPeer: [VIDEO] Received video frame %d from client %d and tile %d at quality %d with length %d\n",
-						p.FrameNr, p.ClientNr, p.TileNr, p.Quality, p.FrameLen)
+				if frames[p.FrameNr] == p.FrameLen && p.FrameNr%100 == 0 {
+					logger.Log(fmt.Sprintf("[Video] Received video frame %d from client %d and tile %d at quality %d with length %d\n", p.FrameNr, p.ClientNr, p.TileNr, p.Quality, p.FrameLen), LevelVerbose)
+					// TODO: Check if this is correct (it shouldn't be)
 					frames[p.FrameNr] = 0
 				}
 			} else {
@@ -384,20 +387,19 @@ func main() {
 				}
 				frames[p.FrameNr] += p.SeqLen
 				if frames[p.FrameNr] == p.FrameLen && p.FrameNr%100 == 0 {
-					fmt.Printf("WebRTCPeer: [AUDIO] Received audio frame %d from client %d with length %d\n",
-						p.FrameNr, p.ClientNr, p.FrameLen)
+					logger.Log(fmt.Sprintf("[Audio] Received audio frame %d from client %d with length %d\n", p.FrameNr, p.ClientNr, p.FrameLen), LevelVerbose)
 				}
 			}
 		}
 	})
 
 	var state = Idle
-	fmt.Printf("WebRTCPeer: Current state: %d\n", state)
+	logger.Log(fmt.Sprintf("Current state: %d\n", state), LevelVerbose)
 
 	var handleMessageCallback = func(wsPacket WebsocketPacket) {
 		switch wsPacket.MessageType {
 		case 1: // hello
-			fmt.Println("WebRTCPeer: Received hello")
+			logger.Log("Received a hello message\n", LevelVerbose)
 			offer, err := peerConnection.CreateOffer(nil)
 			if err != nil {
 				panic(err)
@@ -411,9 +413,9 @@ func main() {
 			}
 			wsHandler.SendMessage(WebsocketPacket{1, 2, string(payload)})
 			state = Hello
-			fmt.Printf("WebRTCPeer: Current state: %d\n", state)
+			logger.Log(fmt.Sprintf("Current state: %d\n", state), LevelVerbose)
 		case 2: // offer
-			fmt.Println("WebRTCPeer: Received offer")
+			logger.Log("Received an offer\n", LevelVerbose)
 			offer := webrtc.SessionDescription{}
 			err := json.Unmarshal([]byte(wsPacket.Message), &offer)
 			if err != nil {
@@ -436,9 +438,9 @@ func main() {
 			}
 			wsHandler.SendMessage(WebsocketPacket{1, 3, string(payload)})
 			state = Offer
-			fmt.Printf("WebRTCPeer: Current state: %d\n", state)
+			logger.Log(fmt.Sprintf("Current state: %d\n", state), LevelVerbose)
 		case 3: // answer
-			fmt.Println("WebRTCPeer: Received answer")
+			logger.Log("Received an answer\n", LevelVerbose)
 			answer := webrtc.SessionDescription{}
 			err := json.Unmarshal([]byte(wsPacket.Message), &answer)
 			if err != nil {
@@ -459,9 +461,9 @@ func main() {
 			}
 			candidatesMux.Unlock()
 			state = Answer
-			fmt.Printf("WebRTCPeer: Current state: %d\n", state)
+			logger.Log(fmt.Sprintf("Current state: %d\n", state), LevelVerbose)
 		case 4: // candidate
-			fmt.Println("WebRTCPeer: Received candidate")
+			logger.Log("Received a candidate\n", LevelVerbose)
 			candidate := wsPacket.Message
 			desc := peerConnection.RemoteDescription()
 			if desc == nil {
@@ -471,9 +473,8 @@ func main() {
 					panic(candidateErr)
 				}
 			}
-
 		default:
-			fmt.Printf("WebRTCPeer: Received non-compliant message type %d\n", wsPacket.MessageType)
+			logger.Error(fmt.Sprintf("Received non-compliant message of type %d\n", wsPacket.MessageType))
 		}
 	}
 
@@ -580,7 +581,7 @@ func (s *TrackLocalCloudRTP) WriteFrame(t Transcoder, tile uint32, quality uint3
 
 		for _, p := range packets {
 			if err := s.rtpTrack.WriteRTP(p); err != nil {
-				fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
+				logger.Error(fmt.Sprintf("%s\n", err))
 			}
 			counter += 1
 		}
@@ -672,7 +673,7 @@ func (s *TrackLocalAudioRTP) WriteAudioFrame(audio []byte) error {
 		counter := 0
 		for _, p := range packets {
 			if err := s.rtpTrack.WriteRTP(p); err != nil {
-				fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
+				logger.Error(fmt.Sprintf("%s\n", err))
 			}
 			counter += 1
 		}

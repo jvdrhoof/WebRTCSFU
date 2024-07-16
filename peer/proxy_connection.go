@@ -97,7 +97,7 @@ func (pc *ProxyConnection) sendPacket(b []byte, offset uint32, packet_type uint3
 	_, err := pc.conn.WriteToUDP(buffProxy, pc.addr)
 	pc.send_mutex.Unlock()
 	if err != nil {
-		fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
+		logger.Error(fmt.Sprintf("%s\n", err))
 		panic(err)
 	}
 }
@@ -105,14 +105,14 @@ func (pc *ProxyConnection) sendPacket(b []byte, offset uint32, packet_type uint3
 func (pc *ProxyConnection) SetupConnection(port string) {
 	address, err := net.ResolveUDPAddr("udp", port)
 	if err != nil {
-		fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
+		logger.Error(fmt.Sprintf("%s\n", err))
 		return
 	}
 
 	// Create a UDP connection
 	pc.conn, err = net.ListenUDP("udp", address)
 	if err != nil {
-		fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
+		logger.Error(fmt.Sprintf("%s\n", err))
 		return
 	}
 
@@ -130,7 +130,7 @@ func (pc *ProxyConnection) SetupConnection(port string) {
 
 	pc.addr, err = net.ResolveUDPAddr("udp", port)
 	if err != nil {
-		fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
+		logger.Error(fmt.Sprintf("%s\n", err))
 		return
 	}
 
@@ -138,17 +138,17 @@ func (pc *ProxyConnection) SetupConnection(port string) {
 	buffer := make([]byte, UDPBufferLength)
 
 	// Wait for incoming messages
-	fmt.Println("WebRTCPeer: Waiting for a message...", port, pc.addr.IP.String())
+	logger.Log(fmt.Sprintf("Waiting for a message on port %s and IP address %s\n", port, pc.addr.IP.String()), LevelVerbose)
 	_, pc.addr, err = pc.conn.ReadFromUDP(buffer)
 	if err != nil {
-		fmt.Printf("WebRTCPeer: ERROR: %s\n", err)
+		logger.Error(fmt.Sprintf("%s\n", err))
 		return
 	}
-	fmt.Println("WebRTCPeer: Connected to Unity DLL")
+	logger.Log("Connected to Unity DLL\n", LevelVerbose)
 }
 
 func (pc *ProxyConnection) StartListening(nTiles int, nQualities int) {
-	println("WebRTCPeer: Start listening for incoming data from DLL")
+	logger.Log("Start listening for incoming data from DLL\n", LevelVerbose)
 	for t := 0; t < nTiles; t++ {
 		for q := 0; q < nQualities; q++ {
 			pc.cond_video[VideoKey{uint32(t), uint32(q)}] = sync.NewCond(&pc.mtx_video)
@@ -165,7 +165,7 @@ func (pc *ProxyConnection) StartListening(nTiles int, nQualities int) {
 				var p RemoteInputVideoPacketHeader
 				err := binary.Read(bufBinary, binary.LittleEndian, &p) // TODO: make sure we check endianess of system here and use that instead!
 				if err != nil {
-					fmt.Printf("WebRTCPeer: Error: %s\n", err)
+					logger.Error(fmt.Sprintf("%s\n", err))
 					return
 				}
 
@@ -208,7 +208,7 @@ func (pc *ProxyConnection) StartListening(nTiles int, nQualities int) {
 				// TODO: Make sure we check endianess of system here and use that instead
 				err := binary.Read(bufBinary, binary.LittleEndian, &p)
 				if err != nil {
-					fmt.Printf("WebRTCPeer: Error: %s\n", err)
+					logger.Error(fmt.Sprintf("%s\n", err))
 					return
 				}
 				pc.mtx_audio.Lock()

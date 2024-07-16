@@ -79,7 +79,7 @@ func (p *PointCloudPayloader) Payload(mtu uint16, payload []byte) (payloads [][]
 
 // New point cloud payloader
 func NewPointCloudPayloader(tile uint32, quality uint32) *PointCloudPayloader {
-	fmt.Printf("WebRTCPeer: NewPointCloudPayloader: tile %d, quality %d\n", tile, quality)
+	logger.Log(fmt.Sprintf("NewPointCloudPayloader started for tile %d and quality %d\n", tile, quality), LevelVerbose)
 	return &PointCloudPayloader{0, tile, quality}
 }
 
@@ -115,6 +115,6 @@ func (p *AudioPayloader) Payload(mtu uint16, payload []byte) (payloads [][]byte)
 
 // New audio payloader
 func NewAudioPayloader() *AudioPayloader {
-	fmt.Printf("WebRTCPeer: NewAudioPayloader\n")
+	logger.Log("NewAudioPayloader started\n", LevelVerbose)
 	return &AudioPayloader{}
 }

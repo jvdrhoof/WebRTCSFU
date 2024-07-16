@@ -27,15 +27,16 @@ var (
 	indexTemplate = &template.Template{}
 
 	// lock for peerConnections, trackLocals and trackQualities
-	listLock         sync.RWMutex
-	qualitiesLock    sync.RWMutex
-	peerConnections  []peerConnectionState
-	trackLocals      map[string]*webrtc.TrackLocalStaticRTP
-	trackQualities   map[string]map[int]*webrtc.TrackLocalStaticRTP
-	settingEngine    webrtc.SettingEngine
-	wsLock           sync.RWMutex
-	maxNumberOfTiles *int
-	pcID             = 0
+	listLock             sync.RWMutex
+	qualitiesLock        sync.RWMutex
+	peerConnections      []peerConnectionState
+	trackLocals          map[string]*webrtc.TrackLocalStaticRTP
+	trackQualities       map[string]map[int]*webrtc.TrackLocalStaticRTP
+	settingEngine        webrtc.SettingEngine
+	wsLock               sync.RWMutex
+	maxNumberOfTiles     *int
+	maxNumberOfQualities *int
+	pcID                 = 0
 )
 
 type WebsocketPacket struct {
@@ -53,11 +54,17 @@ type peerConnectionState struct {
 	pendingCandidatesString []string
 }
 
+var logger *Logger
+
 func main() {
 	maxNumberOfTiles = flag.Int("t", 1, "Number of tiles")
+	maxNumberOfQualities = flag.Int("q", 1, "Number of qualities")
+	logLevel := flag.Int("l", LevelDefault, "Log level (0: default, 1: verbose, 2: debug)")
 	flag.Parse()
 
-	fmt.Printf("WebRTCSFU: Starting SFU with default %d tiles per client\n", *maxNumberOfTiles)
+	logger = NewLogger(*logLevel)
+
+	logger.Log(fmt.Sprintf("Starting SFU with %d tiles per client and %d qualities per tile\n", *maxNumberOfTiles, *maxNumberOfQualities), LevelDefault)
 
 	settingEngine := webrtc.SettingEngine{}
 	settingEngine.SetSCTPMaxReceiveBufferSize(16 * 1024 * 1024)
@@ -94,11 +101,10 @@ func addTrack(pcState *peerConnectionState, t *webrtc.TrackLocalStaticRTP) {
 
 	defer func() {
 		listLock.Unlock()
-		fmt.Printf("WebRTCSFU: [Client #%d] addTrack: Calling signalPeerConnections to inform other clients\n", pcState.ID)
+		logger.LogClient(pcState.ID, "Calling signalPeerConnections to inform other clients\n", LevelVerbose)
 		signalPeerConnections()
 	}()
-
-	fmt.Printf("WebRTCSFU: [Client #%d] addTrack: t.ID %s\n", pcState.ID, t.ID())
+	logger.LogClient(pcState.ID, fmt.Sprintf("Adding track ID %s\n", t.ID()), LevelVerbose)
 	trackLocals[t.ID()] = t
 }
 
@@ -108,11 +114,11 @@ func removeTrack(pcState *peerConnectionState, t *webrtc.TrackLocalStaticRTP) {
 
 	defer func() {
 		listLock.Unlock()
-		fmt.Printf("WebRTCSFU: [Client #%d] removeTrack: Calling signalPeerConnections to inform other clients\n", pcState.ID)
+		logger.LogClient(pcState.ID, "Calling signalPeerConnections to inform other clients\n", LevelVerbose)
 		signalPeerConnections()
 	}()
 
-	fmt.Printf("WebRTCSFU: [Client #%d] removeTrack: t.ID %s\n", pcState.ID, t.ID())
+	logger.LogClient(pcState.ID, fmt.Sprintf("Removing track ID %s\n", t.ID()), LevelVerbose)
 	delete(trackLocals, t.ID())
 }
 
@@ -123,9 +129,10 @@ func addQualityTrack(pcState *peerConnectionState, t *webrtc.TrackLocalStaticRTP
 		qualitiesLock.Unlock()
 	}()
 
+	logger.LogClient(pcState.ID, fmt.Sprintf("Adding incoming track of quality %d for track ID %s\n", quality, t.ID()), LevelVerbose)
+
 	if _, exists := trackQualities[newID]; !exists {
 		trackQualities[newID] = make(map[int]*webrtc.TrackLocalStaticRTP)
-		trackQualities[newID][-1] = nil
 	}
 	trackQualities[newID][quality] = t
 }
@@ -134,6 +141,7 @@ func addQualityTrack(pcState *peerConnectionState, t *webrtc.TrackLocalStaticRTP
 func addNewTrackforPeer(pcState *peerConnectionState, trackID string) {
 	v := strings.Split(string(trackID), "_")
 	if v[0] == "audio" {
+		logger.LogClient(pcState.ID, fmt.Sprintf("Adding a new listening track for audio with track ID %s\n", trackID), LevelDebug)
 		trackLocal := trackLocals[trackID]
 		if sender, err := pcState.peerConnection.AddTrack(trackLocal); err != nil {
 			panic(err)
@@ -147,6 +155,7 @@ func addNewTrackforPeer(pcState *peerConnectionState, trackID string) {
 			qualitiesLock.Unlock()
 		}()
 
+		logger.LogClient(pcState.ID, fmt.Sprintf("Adding a new listening track for video with track ID %s\n", trackID), LevelDebug)
 		trackLocal := trackQualities[trackID][0]
 		if sender, err := pcState.peerConnection.AddTrack(trackLocal); err != nil {
 			panic(err)
@@ -169,24 +178,26 @@ func setTrackQuality(pcState *peerConnectionState, trackID string, quality int) 
 
 	if oldQuality, keyExists := pcState.qualityDecisions[trackID]; keyExists {
 		if oldQuality != quality {
-			fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Trying to adopt the decision for trackID %s to use quality %d instead of quality %d\n", pcState.ID, trackID, quality, oldQuality)
+			logger.LogClient(pcState.ID, fmt.Sprintf("Trying to adopt the decision for track with ID %s to use quality %d instead of quality %d\n", trackID, quality, oldQuality), LevelVerbose)
+
 			if rtpSender, keyExists := pcState.trackRTPSenders[trackID]; keyExists {
 				if quality < 0 {
-					fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Replacing track with NIL\n", pcState.ID)
+					logger.LogClient(pcState.ID, "Replacing track with NIL\n", LevelVerbose)
 					rtpSender.ReplaceTrack(nil)
 				} else {
 					if trackQuality, keyExists := trackQualities[trackID][quality]; keyExists {
-						fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: Replacing track with trackID %s with updated quality %d\n", pcState.ID, trackQuality.ID(), quality)
+						logger.LogClient(pcState.ID, fmt.Sprintf("Replacing current quality track with ID %s with updated quality %d\n", trackQuality.ID(), quality), LevelVerbose)
 						rtpSender.ReplaceTrack(trackQuality)
 					} else {
-						fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: quality %d not found in map trackQualities[trackID], leaving track set to quality %d\n", pcState.ID, quality, oldQuality)
+						logger.LogClient(pcState.ID, fmt.Sprintf("Quality %d not found in map trackQualities[trackID], leaving track set to quality %d\n", quality, oldQuality), LevelVerbose)
+						quality = oldQuality
 					}
 				}
 			}
 			pcState.qualityDecisions[trackID] = quality
 		}
 	} else {
-		fmt.Printf("WebRTCSFU: [Client #%d] setTrackQuality: trackID %s not found in map qualityDecisions, leaving quality unchanged\n", pcState.ID, trackID)
+		logger.LogClient(pcState.ID, fmt.Sprintf("Track ID %s not found in map qualityDecisions, leaving quality unchanged\n", trackID), LevelVerbose)
 	}
 }
 
@@ -232,12 +243,12 @@ func signalPeerConnections() {
 				if v[0] == "video" {
 					clientID, err := strconv.Atoi(v[1])
 					if err != nil {
-						fmt.Printf("WebRTCSFU: [Client #%d] peerConnection.OnTrack: clientID %s cannot be converted to an integer\n", peerConnections[i].ID, v[1])
+						logger.ErrorClient(peerConnections[i].ID, fmt.Sprintf("Client ID %s cannot be converted to an integer\n", v[1]))
 						panic(err)
 					}
 					tileID, err := strconv.Atoi(v[2])
 					if err != nil {
-						fmt.Printf("WebRTCSFU: [Client #%d] peerConnection.OnTrack: tileID %s cannot be converted to an integer\n", peerConnections[i].ID, v[2])
+						logger.ErrorClient(peerConnections[i].ID, fmt.Sprintf("Tile ID %s cannot be converted to an integer\n", v[2]))
 						panic(err)
 					}
 					trackID = fmt.Sprintf("video_%d_%d", clientID, tileID)
@@ -266,8 +277,7 @@ func signalPeerConnections() {
 				return true
 			}
 
-			fmt.Printf("WebRTCSFU: [Client #%d] attemptSync: Sending offer to peerConnection\n", peerConnections[i].ID)
-
+			logger.LogClient(peerConnections[i].ID, "Sending offer to peer connection\n", LevelVerbose)
 			s := fmt.Sprintf("%d@%d@%s", 0, 2, string(payload))
 			wsLock.Lock()
 			peerConnections[i].websocket.WriteMessage(websocket.TextMessage, []byte(s))
@@ -277,7 +287,7 @@ func signalPeerConnections() {
 		return
 	}
 
-	fmt.Println("WebRTCSFU: [All clients] signalPeerConnections: Attempting sync of available tracks")
+	logger.Log("Attemping to synchronize the availble tracks\n", LevelVerbose)
 
 	for syncAttempt := 0; ; syncAttempt++ {
 		if syncAttempt == 1 {
@@ -298,9 +308,7 @@ func signalPeerConnections() {
 
 // Handle incoming websockets
 func websocketHandler(w http.ResponseWriter, r *http.Request) {
-	for k, v := range r.URL.Query() {
-		fmt.Printf("%s %s \n", k, v)
-	}
+	logger.Log(fmt.Sprintf("Web socket handler targeted with URL query %s\n", r.URL.Query()), LevelVerbose)
 	numberOfTiles := *maxNumberOfTiles
 	numberOfTilesS := r.URL.Query().Get("ntiles")
 	if numberOfTilesS != "" {
@@ -321,26 +329,27 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	currentPCID := pcID
 	pcID++
 	listLock.Unlock()
-	fmt.Printf("WebRTCSFU: [Address %s] webSocketHandler: New connection received, assigning client ID #%d\n", r.RemoteAddr, currentPCID)
-	fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Websocket handler started\n", currentPCID)
+
+	logger.Log(fmt.Sprintf("New connection received for address %s, assigning client ID #%d\n", r.RemoteAddr, currentPCID), LevelVerbose)
+	logger.LogClient(currentPCID, "Websocket handler started\n", LevelDebug)
 
 	// Upgrade HTTP request to Websocket
 	unsafeWebSocketConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: ERROR: %s\n", currentPCID, err)
+		logger.ErrorClient(currentPCID, fmt.Sprintf("%s\n", err))
 		return
 	}
 
-	fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Websocket handler upgraded\n", currentPCID)
+	logger.LogClient(currentPCID, "Websocket handler upgraded\n", LevelDebug)
 
 	webSocketConnection := &threadSafeWriter{unsafeWebSocketConn, sync.Mutex{}}
 	// When this frame returns close the Websocket
 	defer func() {
-		fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Closing a ThreadSafeWriter\n", currentPCID)
+		logger.LogClient(currentPCID, "Closing a ThreadSafeWriter\n", LevelDebug)
 		webSocketConnection.Close()
 	}()
 
-	fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Creating a new peer connection\n", currentPCID)
+	logger.LogClient(currentPCID, "Creating a new peer connection\n", LevelVerbose)
 
 	mediaEngine := &webrtc.MediaEngine{}
 	interceptorRegistry := &interceptor.Registry{}
@@ -423,33 +432,33 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 
-	fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Peer connection created\n", currentPCID)
+	logger.LogClient(currentPCID, "Peer connection created\n", LevelVerbose)
 
 	// When this frame returns close the PeerConnection
 	defer func() {
-		fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Closing a peer connection\n", currentPCID)
+		logger.LogClient(currentPCID, "Closing a peer connection\n", LevelVerbose)
 		peerConnection.Close()
 	}()
 
-	fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Adding audio track\n", currentPCID)
+	logger.LogClient(currentPCID, "Adding audio track\n", LevelVerbose)
 	if _, err := peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio, webrtc.RTPTransceiverInit{
 		Direction: webrtc.RTPTransceiverDirectionRecvonly,
 	}); err != nil {
-		fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: ERROR: %s when adding audio transceiver\n", currentPCID, err)
+		logger.ErrorClient(currentPCID, fmt.Sprintf("When adding audio transceiver: %s\n", err))
 		return
 	}
 
-	fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Iterating and adding %d video tracks\n", currentPCID, numberOfTiles)
+	logger.LogClient(currentPCID, fmt.Sprintf("Iterating and adding %d video tracks\n", numberOfTiles*numberOfQualities), LevelVerbose)
 	for i := 0; i < numberOfTiles*numberOfQualities; i++ {
 		if _, err := peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo, webrtc.RTPTransceiverInit{
 			Direction: webrtc.RTPTransceiverDirectionRecvonly,
 		}); err != nil {
-			fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: ERROR: %s when adding video transceiver\n", currentPCID, err)
+			logger.ErrorClient(currentPCID, fmt.Sprintf("When adding video transceiver: %s\n", err))
 			return
 		}
 	}
 
-	fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Waiting for lock to add connection to connection list\n", currentPCID)
+	logger.LogClient(currentPCID, "Waiting for lock to add connection to connection list\n", LevelVerbose)
 
 	// Add our new PeerConnection to global list
 	listLock.Lock()
@@ -463,7 +472,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		if i == nil {
 			return
 		}
-		fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: OnICECandidate: New candidate addr %s port %d\n", pcState.ID, i.Address, i.Port)
+		logger.LogClient(pcState.ID, fmt.Sprintf("New candidate with address %s and port %d\n", i.Address, i.Port), LevelVerbose)
 		payload := []byte(i.ToJSON().Candidate)
 		s := fmt.Sprintf("%d@%d@%s", 0, 4, string(payload))
 		wsLock.Lock()
@@ -476,64 +485,64 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 
 	// If PeerConnection is closed remove it from global list
 	peerConnection.OnConnectionStateChange(func(p webrtc.PeerConnectionState) {
-		fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: OnConnectionStateChange: Peer connection state has changed to %s\n", pcState.ID, p.String())
+		logger.LogClient(pcState.ID, fmt.Sprintf("Peer connection state has changed to %s\n", p.String()), LevelVerbose)
 		switch p {
 		case webrtc.PeerConnectionStateFailed:
 			if err := peerConnection.Close(); err != nil {
-				fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: ERROR: %s\n", pcState.ID, err)
+				logger.ErrorClient(pcState.ID, fmt.Sprintf("%s\n", err))
 			}
 		case webrtc.PeerConnectionStateClosed:
-			fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: OnConnectionStateChange: Closed\n", pcState.ID)
+			logger.LogClient(pcState.ID, "Peer connection closed\n", LevelVerbose)
 			signalPeerConnections()
 		case webrtc.PeerConnectionStateConnected:
-			fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: OnConnectionStateChange: Connected\n", pcState.ID)
+			logger.LogClient(pcState.ID, "Peer connected\n", LevelVerbose)
 		}
 	})
 
 	// Called when the packet is sent over this track
 	peerConnection.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		fmt.Printf("WebRTCSFU: [Client #%d] OnTrack: ID %s, StreamID %s\n", pcState.ID, t.ID(), t.StreamID())
+		logger.LogClient(pcState.ID, fmt.Sprintf("ID %s, StreamID %s\n", t.ID(), t.StreamID()), LevelVerbose)
 		var trackLocal *webrtc.TrackLocalStaticRTP
 		var err error
 		v := strings.Split(string(t.ID()), "_")
 		if v[0] == "audio" {
 			trackLocal, err = webrtc.NewTrackLocalStaticRTP(t.Codec().RTPCodecCapability, t.ID(), t.StreamID())
 			if err != nil {
+				logger.ErrorClient(pcState.ID, fmt.Sprintf("Failed to create a track with ID %s and StreamID %s\n", t.ID(), t.StreamID()))
 				panic(err)
 			}
 			addTrack(&pcState, trackLocal)
 			defer func() {
-				fmt.Printf("WebRTCSFU: [Client #%d] OnTrack: Removing track %s\n", pcState.ID, trackLocal.ID())
 				removeTrack(&pcState, trackLocal)
 			}()
 		} else {
 			clientID, err := strconv.Atoi(v[1])
 			if err != nil {
-				fmt.Printf("WebRTCSFU: [Client #%d] peerConnection.OnTrack: clientID %s cannot be converted to an integer\n", pcState.ID, v[1])
+				logger.ErrorClient(pcState.ID, fmt.Sprintf("Client ID %s cannot be converted to an integer\n", v[1]))
 				panic(err)
 			}
 			tileID, err := strconv.Atoi(v[2])
 			if err != nil {
-				fmt.Printf("WebRTCSFU: [Client #%d] peerConnection.OnTrack: tileID %s cannot be converted to an integer\n", pcState.ID, v[2])
+				logger.ErrorClient(pcState.ID, fmt.Sprintf("Tile ID %s cannot be converted to an integer\n", v[2]))
 				panic(err)
 			}
 			quality, err := strconv.Atoi(v[3])
 			if err != nil {
-				fmt.Printf("WebRTCSFU: [Client #%d] peerConnection.OnTrack: quality %s cannot be converted to an integer\n", pcState.ID, v[13])
+				logger.ErrorClient(pcState.ID, fmt.Sprintf("Quality %s cannot be converted to an integer\n", v[3]))
 				panic(err)
 			}
 			newID := fmt.Sprintf("video_%d_%d", clientID, tileID)
 			newStreamID := fmt.Sprintf("%d", tileID)
-			fmt.Printf("WebRTCSFU: [Client #%d] OnTrack: %s %s\n", pcState.ID, newID, newStreamID)
+			logger.LogClient(pcState.ID, fmt.Sprintf("New track with ID %s and StreamID %s\n", newID, newStreamID), LevelVerbose)
 			trackLocal, err = webrtc.NewTrackLocalStaticRTP(t.Codec().RTPCodecCapability, newID, newStreamID)
 			if err != nil {
+				logger.ErrorClient(pcState.ID, fmt.Sprintf("Failed to create a track with ID %s and StreamID %s\n", newID, newStreamID))
 				panic(err)
 			}
 			addQualityTrack(&pcState, trackLocal, quality, newID)
 			if quality == 0 {
 				addTrack(&pcState, trackLocal)
 				defer func() {
-					fmt.Printf("WebRTCSFU: [Client #%d] OnTrack: Removing track %s\n", pcState.ID, trackLocal.ID())
 					removeTrack(&pcState, trackLocal)
 				}()
 			}
@@ -543,29 +552,29 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 
 			i, _, err := t.Read(buf)
 			if err != nil {
-				fmt.Printf("WebRTCSFU: [Client #%d] OnTrack: Track %s error during read: %s\n", pcState.ID, trackLocal.ID(), err)
+				logger.ErrorClient(pcState.ID, fmt.Sprintf("Track %s during read operation: %s\n", trackLocal.ID(), err))
 				break
 			}
 			if _, err = trackLocal.Write(buf[:i]); err != nil {
-				fmt.Printf("WebRTCSFU: [Client #%d] OnTrack: Track %s error during write: %s\n", pcState.ID, trackLocal.ID(), err)
+				logger.ErrorClient(pcState.ID, fmt.Sprintf("Track %s during write operation: %s\n", trackLocal.ID(), err))
 				break
 			}
 		}
 	})
 
-	fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Will now call signalpeerconnections again\n", pcState.ID)
+	logger.LogClient(pcState.ID, "Will now call signalpeerconnections again\n", LevelVerbose)
 	signalPeerConnections()
 
 	for {
 		_, raw, err := webSocketConnection.ReadMessage()
 		if err != nil {
-			fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: ReadMessage: error %s\n", pcState.ID, err.Error())
+			logger.ErrorClient(pcState.ID, fmt.Sprintf("ReadMessage: %s\n", err))
 			break
 		}
 		v := strings.Split(string(raw), "@")
 		messageType, _ := strconv.ParseUint(v[1], 10, 64)
 		message := v[2]
-		fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Message type: %d (%s)\n", pcState.ID, messageType, websocketMessageTypeToString(messageType))
+		logger.LogClient(pcState.ID, fmt.Sprintf("Message type: %d (%s)\n", messageType, websocketMessageTypeToString(messageType)), LevelVerbose)
 		switch messageType {
 		case 3: // answer
 			answer := webrtc.SessionDescription{}
@@ -590,7 +599,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		case 7: // quality decisions
-			fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: Implementing quality decisions (%s)\n", pcState.ID, message)
+			logger.LogClient(pcState.ID, fmt.Sprintf("Implementing quality decisions: %s\n", message), LevelVerbose)
 			v := strings.Split(message, ";")
 			for _, w := range v {
 				x := strings.Split(w, ",")
@@ -599,7 +608,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 					trackID := fmt.Sprintf("video_%s_%d", clientID, tileID)
 					quality, err := strconv.Atoi(sQuality)
 					if err != nil {
-						fmt.Printf("WebRTCSFU: [Client #%d] webSocketHandler: %s cannot be converted to an integer\n", pcState.ID, sQuality)
+						logger.ErrorClient(pcState.ID, fmt.Sprintf("The string %s should contain an integer representing the preferred quality level, but cannot be converted to an integer\n", sQuality))
 						continue
 					}
 					setTrackQuality(&pcState, trackID, quality)

@@ -15,4 +15,3 @@ endif()
 
 add_subdirectory(sfu)
 add_subdirectory(peer)
-
