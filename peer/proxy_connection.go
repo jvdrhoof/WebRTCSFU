@@ -83,16 +83,16 @@ func NewProxyConnection() *ProxyConnection {
 	return &ProxyConnection{nil, nil, NewPriorityPreferenceLock(),
 		make(map[VideoKey]map[uint32]RemoteTile), make(map[VideoKey][]RemoteTile), // Video
 		make(map[uint32]RemoteTile), make([]RemoteTile, 0), // Audio
-		sync.Mutex{},
+		sync.Mutex{},                                // Send mutex
 		make(map[VideoKey]*sync.Cond), sync.Mutex{}, // Video mutex
 		nil, sync.Mutex{}, // Audio mutex
 	}
 }
 
 func (pc *ProxyConnection) sendPacket(b []byte, offset uint32, packet_type uint32) {
-	buffProxy := make([]byte, 1300)
+	buffProxy := make([]byte, BufferProxyLength)
 	binary.LittleEndian.PutUint32(buffProxy[0:], packet_type)
-	copy(buffProxy[4:], b[offset:])
+	copy(buffProxy[TypeHeaderSize:], b[offset:])
 	pc.send_mutex.Lock()
 	_, err := pc.conn.WriteToUDP(buffProxy, pc.addr)
 	pc.send_mutex.Unlock()
@@ -135,7 +135,7 @@ func (pc *ProxyConnection) SetupConnection(port string) {
 	}
 
 	pc.SendPeerReadyPacket()
-	buffer := make([]byte, 1500)
+	buffer := make([]byte, UDPBufferLength)
 
 	// Wait for incoming messages
 	fmt.Println("WebRTCPeer: Waiting for a message...", port, pc.addr.IP.String())
@@ -157,11 +157,11 @@ func (pc *ProxyConnection) StartListening(nTiles int, nQualities int) {
 	pc.cond_audio = sync.NewCond(&pc.mtx_audio)
 	go func() {
 		for {
-			buffer := make([]byte, 1500)
+			buffer := make([]byte, UDPBufferLength)
 			_, _, _ = pc.conn.ReadFromUDP(buffer)
-			ptype := binary.LittleEndian.Uint32(buffer[:4])
+			ptype := binary.LittleEndian.Uint32(buffer[:TypeHeaderSize])
 			if ptype == TilePacketType {
-				bufBinary := bytes.NewBuffer(buffer[4:32])
+				bufBinary := bytes.NewBuffer(buffer[TypeHeaderSize : TypeHeaderSize+VideoHeaderSize])
 				var p RemoteInputVideoPacketHeader
 				err := binary.Read(bufBinary, binary.LittleEndian, &p) // TODO: make sure we check endianess of system here and use that instead!
 				if err != nil {
@@ -186,7 +186,7 @@ func (pc *ProxyConnection) StartListening(nTiles int, nQualities int) {
 					pc.incomplete_tiles[key][p.FrameNr] = r
 				}
 				value := pc.incomplete_tiles[key][p.FrameNr]
-				copy(value.fileData[p.FrameOffset:p.FrameOffset+p.PacketLen], buffer[28:28+p.PacketLen])
+				copy(value.fileData[p.FrameOffset:p.FrameOffset+p.PacketLen], buffer[TypeHeaderSize+VideoHeaderSize:TypeHeaderSize+VideoHeaderSize+p.PacketLen])
 				value.currentLen = value.currentLen + p.PacketLen
 				pc.incomplete_tiles[key][p.FrameNr] = value
 				if value.currentLen == value.fileLen {
@@ -195,16 +195,18 @@ func (pc *ProxyConnection) StartListening(nTiles int, nQualities int) {
 						pc.complete_tiles[key] = make([]RemoteTile, 1)
 					}
 					// For now we will only save 1 frame for each tile max (do we want to save more?)
-					// TODO use channels instead
+					// TODO: Use channels instead
 					pc.complete_tiles[key][0] = value
 					delete(pc.incomplete_tiles[key], p.FrameNr)
-					pc.cond_video[key].Broadcast() // TODO check if order broadcast -> unlock is correct
+					// TODO: Check if order broadcast -> unlock is correct
+					pc.cond_video[key].Broadcast()
 				}
 				pc.mtx_video.Unlock()
 			} else if ptype == AudioPacketType {
-				bufBinary := bytes.NewBuffer(buffer[4:24])
+				bufBinary := bytes.NewBuffer(buffer[TypeHeaderSize : TypeHeaderSize+AudioHeaderSize])
 				var p RemoteInputAudioPacketHeader
-				err := binary.Read(bufBinary, binary.LittleEndian, &p) // TODO: make sure we check endianess of system here and use that instead!
+				// TODO: Make sure we check endianess of system here and use that instead
+				err := binary.Read(bufBinary, binary.LittleEndian, &p)
 				if err != nil {
 					fmt.Printf("WebRTCPeer: Error: %s\n", err)
 					return
@@ -221,18 +223,17 @@ func (pc *ProxyConnection) StartListening(nTiles int, nQualities int) {
 					pc.incomplete_audio_frames[p.FrameNr] = r
 				}
 				value := pc.incomplete_audio_frames[p.FrameNr]
-				copy(value.fileData[p.FrameOffset:p.FrameOffset+p.PacketLen], buffer[24:24+p.PacketLen])
+				copy(value.fileData[p.FrameOffset:p.FrameOffset+p.PacketLen], buffer[TypeHeaderSize+AudioHeaderSize:TypeHeaderSize+AudioHeaderSize+p.PacketLen])
 				value.currentLen = value.currentLen + p.PacketLen
 				pc.incomplete_audio_frames[p.FrameNr] = value
 				if value.currentLen == value.fileLen {
 					// For now we will only save 1 frame for each tile max (do we want to save more?)
-					// TODO use channels instead
+					// TODO: Use channels instead
 					if len(pc.complete_audio_frames) == 0 {
 						pc.complete_audio_frames = append(pc.complete_audio_frames, value)
 					} else {
 						pc.complete_audio_frames[0] = value
 					}
-
 					delete(pc.incomplete_audio_frames, p.FrameNr)
 					pc.cond_audio.Broadcast()
 				}
@@ -243,7 +244,7 @@ func (pc *ProxyConnection) StartListening(nTiles int, nQualities int) {
 }
 
 func (pc *ProxyConnection) SendPeerReadyPacket() {
-	pc.sendPacket(make([]byte, 100), 0, ReadyPacketType)
+	pc.sendPacket(make([]byte, PeerReadyLength), 0, ReadyPacketType)
 }
 
 func (pc *ProxyConnection) SendTilePacket(b []byte, offset uint32) {

@@ -277,7 +277,7 @@ func signalPeerConnections() {
 		return
 	}
 
-	fmt.Println("WebRTCSFU: [All clients] signalPeerConnections: attempting sync of available tracks")
+	fmt.Println("WebRTCSFU: [All clients] signalPeerConnections: Attempting sync of available tracks")
 
 	for syncAttempt := 0; ; syncAttempt++ {
 		if syncAttempt == 1 {
