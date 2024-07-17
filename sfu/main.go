@@ -287,7 +287,7 @@ func signalPeerConnections() {
 		return
 	}
 
-	logger.Log("signalPeerConnections", "Attemping to synchronize the availble tracks", LevelVerbose)
+	logger.Log("signalPeerConnections", "Attemping to synchronize the available tracks", LevelVerbose)
 
 	for syncAttempt := 0; ; syncAttempt++ {
 		if syncAttempt == 1 {
