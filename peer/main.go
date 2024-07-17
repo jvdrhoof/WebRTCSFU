@@ -369,7 +369,7 @@ func main() {
 
 				// Uncomment to debug the actual content of packets
 				/* if frames[p.FrameNr] == 0 {
-					logger.Log(fmt.Sprintf("[Video] Bytes with total payload %v", buf[48:]), LevelDebug)
+					logger.Log("[RECV]", fmt.Sprintf("[Video] Bytes with total payload %v", buf[48:]), LevelDebug)
 				} */
 
 				frames[p.FrameNr] += p.SeqLen
