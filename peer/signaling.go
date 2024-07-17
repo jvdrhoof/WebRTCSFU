@@ -24,11 +24,11 @@ type WebsocketHandler struct {
 }
 
 func NewWSHandler(addr, path string, nTiles int, nQualities int) *WebsocketHandler {
-	logger.Log(fmt.Sprintf("Started with address %s and path %s", addr, path), LevelVerbose)
+	logger.Log("NewWSHandler", fmt.Sprintf("Started with address %s and path %s", addr, path), LevelVerbose)
 	u := url.URL{Scheme: "ws", Host: addr, Path: path, RawQuery: "ntiles=" + strconv.Itoa(nTiles) + "&nqualities=" + strconv.Itoa(nQualities)}
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
-		logger.Error(fmt.Sprintf("%s", err))
+		logger.Error("NewWSHandler", fmt.Sprintf("%s", err))
 		panic(err)
 	}
 	return &WebsocketHandler{conn, sync.RWMutex{}}
@@ -39,14 +39,14 @@ func (w *WebsocketHandler) StartListening(cb WebsocketCallback) {
 		for {
 			_, message, err := w.conn.ReadMessage()
 			if err != nil {
-				logger.Error(fmt.Sprintf("%s", err))
+				logger.Error("StartListening", fmt.Sprintf("%s", err))
 				break
 			}
 			v := strings.Split(string(message), "@")
 			clientID, _ := strconv.ParseUint(v[0], 10, 64)
 			messageType, _ := strconv.ParseUint(v[1], 10, 64)
 			wsPacket := WebsocketPacket{clientID, messageType, v[2]}
-			logger.Log(fmt.Sprintf("Message from client %d of type %d", clientID, messageType), LevelVerbose)
+			logger.Log("StartListening", fmt.Sprintf("Message from client %d of type %d", clientID, messageType), LevelVerbose)
 			cb(wsPacket)
 		}
 	}()

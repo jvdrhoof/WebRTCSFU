@@ -38,12 +38,12 @@ func getCallerFunctionName() string {
 	return parts[len(parts)-1]
 }
 
-func (l *Logger) Log(message string, level int) {
+func (l *Logger) Log(function string, message string, level int) {
 	if l.level >= level {
-		fmt.Printf("WebRTCClient: %s: %s\n", getCallerFunctionName(), message)
+		fmt.Printf("WebRTCClient: %s: %s\n", function, message)
 	}
 }
 
-func (l *Logger) Error(message string) {
-	fmt.Printf("WebRTCClient: %s: ERROR: %s\n", getCallerFunctionName(), message)
+func (l *Logger) Error(function string, message string) {
+	fmt.Printf("WebRTCClient: %s: ERROR: %s\n", function, message)
 }
