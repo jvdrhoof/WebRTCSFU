@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -306,6 +307,14 @@ func signalPeerConnections() {
 	}
 }
 
+// Filter for IP addresses on the Virtual Wall
+func VirtualWallFilter(addr net.IP) bool {
+	if strings.Contains(addr.String(), "192.168") {
+		return true
+	}
+	return false
+}
+
 // Handle incoming websockets
 func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	logger.Log("websocketHandler", fmt.Sprintf("Web socket handler targeted with URL query %s", r.URL.Query()), LevelVerbose)
@@ -329,6 +338,10 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	currentPCID := pcID
 	pcID++
 	listLock.Unlock()
+
+	// Filter for Virtual Wall
+	// ip_address := r.Context().Value(http.LocalAddrContextKey).(net.Addr).String()
+	// settingEngine.SetIPFilter(VirtualWallFilter)
 
 	logger.Log("websocketHandler", fmt.Sprintf("New connection received for address %s, assigning client ID #%d", r.RemoteAddr, currentPCID), LevelVerbose)
 	logger.LogClient(currentPCID, "websocketHandler", "Websocket handler started", LevelDebug)
@@ -473,13 +486,16 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		logger.LogClient(pcState.ID, "OnICECandidate", fmt.Sprintf("New candidate with address %s and port %d", i.Address, i.Port), LevelVerbose)
-		payload := []byte(i.ToJSON().Candidate)
-		s := fmt.Sprintf("%d@%d@%s", 0, 4, string(payload))
-		wsLock.Lock()
-		err = webSocketConnection.WriteMessage(websocket.TextMessage, []byte(s))
-		wsLock.Unlock()
-		if err != nil {
-			panic(err)
+		if strings.Contains(i.Address, "193.190") {
+			logger.LogClient(pcState.ID, "OnICECandidate", fmt.Sprintf("Forwarding valid candidate with address %s and port %d", i.Address, i.Port), LevelVerbose)
+			payload := []byte(i.ToJSON().Candidate)
+			s := fmt.Sprintf("%d@%d@%s", 0, 4, string(payload))
+			wsLock.Lock()
+			err = webSocketConnection.WriteMessage(websocket.TextMessage, []byte(s))
+			wsLock.Unlock()
+			if err != nil {
+				panic(err)
+			}
 		}
 	})
 

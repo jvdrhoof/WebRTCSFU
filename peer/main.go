@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -230,6 +231,7 @@ func main() {
 		if c == nil {
 			return
 		}
+		logger.Log("OnICECandidate", fmt.Sprintf("New candidate: %s, %s", c.Address, c.String()), LevelVerbose)
 		candidatesMux.Lock()
 		desc := peerConnection.RemoteDescription()
 		if desc == nil {
@@ -421,7 +423,7 @@ func main() {
 			state = Hello
 			logger.Log("handleMessageCallback", fmt.Sprintf("Current state: %d", state), LevelVerbose)
 		case 2: // offer
-			logger.Log("handleMessageCallback", "Received an offer", LevelVerbose)
+			logger.Log("handleMessageCallback", fmt.Sprintf("Received an offer: %s", wsPacket.Message), LevelVerbose)
 			offer := webrtc.SessionDescription{}
 			err := json.Unmarshal([]byte(wsPacket.Message), &offer)
 			if err != nil {
@@ -446,7 +448,7 @@ func main() {
 			state = Offer
 			logger.Log("handleMessageCallback", fmt.Sprintf("Current state: %d", state), LevelVerbose)
 		case 3: // answer
-			logger.Log("handleMessageCallback", "Received an answer", LevelVerbose)
+			logger.Log("handleMessageCallback", fmt.Sprintf("Received an answer: %s", wsPacket.Message), LevelVerbose)
 			answer := webrtc.SessionDescription{}
 			err := json.Unmarshal([]byte(wsPacket.Message), &answer)
 			if err != nil {
@@ -461,6 +463,7 @@ func main() {
 				wsHandler.SendMessage(WebsocketPacket{1, 4, string(payload)})
 			}
 			for _, c := range pendingCandidatesString {
+				logger.Log("handleMessageCallback", fmt.Sprintf("Pending candidates string: %s", c), LevelVerbose)
 				if candidateErr := peerConnection.AddICECandidate(webrtc.ICECandidateInit{Candidate: c}); candidateErr != nil {
 					panic(candidateErr)
 				}
@@ -469,14 +472,18 @@ func main() {
 			state = Answer
 			logger.Log("handleMessageCallback", fmt.Sprintf("Current state: %d", state), LevelVerbose)
 		case 4: // candidate
-			logger.Log("handleMessageCallback", "Received a candidate", LevelVerbose)
 			candidate := wsPacket.Message
-			desc := peerConnection.RemoteDescription()
-			if desc == nil {
-				pendingCandidatesString = append(pendingCandidatesString, candidate)
-			} else {
-				if candidateErr := peerConnection.AddICECandidate(webrtc.ICECandidateInit{Candidate: candidate}); candidateErr != nil {
-					panic(candidateErr)
+			logger.Log("handleMessageCallback", fmt.Sprintf("New candidate received: %s", candidate), LevelVerbose)
+			subnetworkID := 11 + 2**clientID
+			if !strings.HasPrefix(*sfuAddress, "193.190") || strings.Contains(candidate, " 192.168."+strconv.Itoa(subnetworkID)) {
+				logger.Log("handleMessageCallback", fmt.Sprintf("Considering candidate: %s", candidate), LevelVerbose)
+				desc := peerConnection.RemoteDescription()
+				if desc == nil {
+					pendingCandidatesString = append(pendingCandidatesString, candidate)
+				} else {
+					if candidateErr := peerConnection.AddICECandidate(webrtc.ICECandidateInit{Candidate: candidate}); candidateErr != nil {
+						panic(candidateErr)
+					}
 				}
 			}
 		default:
