@@ -355,10 +355,7 @@ func updateClientTrackStateQuality(trackLocal *webrtc.TrackLocalStaticRTP, quali
 
 // Filter for IP addresses on the Virtual Wall
 func VirtualWallFilter(addr net.IP) bool {
-	if strings.Contains(addr.String(), "192.168") {
-		return true
-	}
-	return false
+	return strings.HasPrefix(addr.String(), "193.190")
 }
 
 // Handle incoming websockets
@@ -397,8 +394,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	listLock.Unlock()
 
 	// Filter for Virtual Wall
-	// ip_address := r.Context().Value(http.LocalAddrContextKey).(net.Addr).String()
-	// settingEngine.SetIPFilter(VirtualWallFilter)
+	settingEngine.SetIPFilter(VirtualWallFilter)
 
 	logger.Log("websocketHandler", fmt.Sprintf("New connection received for address %s, assigning client ID #%d", r.RemoteAddr, currentPCID), LevelVerbose)
 	logger.LogClient(currentPCID, "websocketHandler", "Websocket handler started", LevelDebug)
