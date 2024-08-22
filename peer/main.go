@@ -232,15 +232,20 @@ func main() {
 			return
 		}
 		logger.Log("OnICECandidate", fmt.Sprintf("New candidate: %s, %s", c.Address, c.String()), LevelVerbose)
-		candidatesMux.Lock()
-		desc := peerConnection.RemoteDescription()
-		if desc == nil {
-			pendingCandidates = append(pendingCandidates, c)
+		if !strings.HasPrefix(*sfuAddress, "193.190") || strings.HasPrefix(c.Address, "10.8.0") {
+			logger.Log("OnICECandidate", fmt.Sprintf("Accepted candidate: %s, %s", c.Address, c.String()), LevelVerbose)
+			candidatesMux.Lock()
+			desc := peerConnection.RemoteDescription()
+			if desc == nil {
+				pendingCandidates = append(pendingCandidates, c)
+			} else {
+				payload := []byte(c.ToJSON().Candidate)
+				wsHandler.SendMessage(WebsocketPacket{1, 4, string(payload)})
+			}
+			candidatesMux.Unlock()
 		} else {
-			payload := []byte(c.ToJSON().Candidate)
-			wsHandler.SendMessage(WebsocketPacket{1, 4, string(payload)})
+			logger.Log("OnICECandidate", fmt.Sprintf("Using WebRTC through the UGent Virtual Wall requires VPN-connected clients in the 10.8.0.0/24 address range, ignoring candidate: %s, %s", c.Address, c.String()), LevelVerbose)
 		}
-		candidatesMux.Unlock()
 	})
 
 	peerConnection.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
@@ -475,7 +480,7 @@ func main() {
 			candidate := wsPacket.Message
 			logger.Log("handleMessageCallback", fmt.Sprintf("New candidate received: %s", candidate), LevelVerbose)
 			subnetworkID := 11 + 2**clientID
-			if !strings.HasPrefix(*sfuAddress, "193.190") || strings.Contains(candidate, " 192.168."+strconv.Itoa(subnetworkID)) {
+			if !strings.HasPrefix(*sfuAddress, "193.190") || strings.Contains(candidate, " 192.168."+strconv.Itoa(subnetworkID)) || strings.Contains(candidate, " 193.190") {
 				logger.Log("handleMessageCallback", fmt.Sprintf("Considering candidate: %s", candidate), LevelVerbose)
 				desc := peerConnection.RemoteDescription()
 				if desc == nil {

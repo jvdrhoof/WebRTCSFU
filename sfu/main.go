@@ -53,6 +53,9 @@ type peerConnectionState struct {
 	trackRTPSenders         map[string]*webrtc.RTPSender
 	qualityDecisions        map[string]int
 	pendingCandidatesString []string
+
+	clientID      int
+	numberOfTiles int
 }
 
 var logger *Logger
@@ -97,13 +100,17 @@ func main() {
 }
 
 // Add a new sender track for either a video tile (initially at quality 0) or audio
-func addTrack(pcState *peerConnectionState, t *webrtc.TrackLocalStaticRTP) {
-	listLock.Lock()
-
+func addTrack(pcState *peerConnectionState, t *webrtc.TrackLocalStaticRTP, callSignal bool) {
+	if callSignal {
+		listLock.Lock()
+	}
 	defer func() {
-		listLock.Unlock()
-		logger.LogClient(pcState.ID, "addTrack", "Calling signalPeerConnections to inform other clients", LevelVerbose)
-		signalPeerConnections()
+		if callSignal {
+			logger.LogClient(pcState.ID, "addTrack", "Calling signalPeerConnections to inform other clients", LevelVerbose)
+			listLock.Unlock()
+			signalPeerConnections()
+		}
+
 	}()
 	logger.LogClient(pcState.ID, "addTrack", fmt.Sprintf("Adding track ID %s", t.ID()), LevelVerbose)
 	trackLocals[t.ID()] = t
@@ -257,6 +264,14 @@ func signalPeerConnections() {
 				existingSenders[trackID] = true
 			}
 
+			// Also make sure we dont send tracks that havent started their OnTrack yet
+			trackIDAudio := fmt.Sprintf("audio_%d", peerConnections[i].clientID)
+			existingSenders[trackIDAudio] = true
+			for j := 0; j < peerConnections[i].numberOfTiles; j++ {
+				trackID := fmt.Sprintf("video_%d_%d", peerConnections[i].clientID, j)
+				existingSenders[trackID] = true
+			}
+
 			// Add all tracks we aren't sending yet to the PeerConnection
 			for trackID := range trackLocals {
 				if _, ok := existingSenders[trackID]; !ok {
@@ -295,7 +310,7 @@ func signalPeerConnections() {
 			// Release the lock and attempt a sync in 5 seconds
 			// We might be blocking a RemoveTrack or AddTrack
 			go func() {
-				time.Sleep(time.Second * 5)
+				time.Sleep(time.Millisecond * 50)
 				signalPeerConnections()
 			}()
 			return
@@ -303,6 +318,37 @@ func signalPeerConnections() {
 
 		if !attemptSync() {
 			break
+		}
+	}
+}
+
+func updateClientTrackState(trackLocal *webrtc.TrackLocalStaticRTP) {
+	listLock.Lock()
+	defer func() {
+		listLock.Unlock()
+	}()
+	for _, pc := range peerConnections {
+		if rtpSender, exists := pc.trackRTPSenders[trackLocal.ID()]; exists {
+			rtpSender.ReplaceTrack(trackLocal)
+		}
+	}
+}
+
+func updateClientTrackStateQuality(trackLocal *webrtc.TrackLocalStaticRTP, quality int) {
+	listLock.Lock()
+	qualitiesLock.Lock()
+	defer func() {
+		listLock.Unlock()
+		qualitiesLock.Unlock()
+	}()
+	for _, pc := range peerConnections {
+		if rtpSender, exists := pc.trackRTPSenders[trackLocal.ID()]; exists {
+			if q, exists := pc.qualityDecisions[trackLocal.ID()]; exists {
+				if q == quality {
+					rtpSender.ReplaceTrack(trackLocal)
+				}
+			}
+
 		}
 	}
 }
@@ -332,6 +378,17 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		i, err := strconv.Atoi(numberOfQualitiesS)
 		if err == nil {
 			numberOfQualities = i
+		}
+	}
+	clientID := 0
+	clientIDS := r.URL.Query().Get("clientid")
+	if clientIDS != "" {
+		i, err := strconv.Atoi(clientIDS)
+		if err == nil {
+			clientID = i
+		} else {
+			logger.Log("websocketHandler", "Missing clientID, cannot form WebSocket connection", LevelDefault)
+			return
 		}
 	}
 	listLock.Lock()
@@ -475,8 +532,26 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Add our new PeerConnection to global list
 	listLock.Lock()
-	var pcState = peerConnectionState{peerConnection, webSocketConnection, currentPCID, make(map[string]*webrtc.RTPSender), make(map[string]int), make([]string, 0)}
+	var pcState = peerConnectionState{peerConnection, webSocketConnection, currentPCID, make(map[string]*webrtc.RTPSender), make(map[string]int), make([]string, 0), clientID, numberOfTiles}
 	//pcID += 1
+	newAudioID := fmt.Sprintf("audio_%d", clientID)
+	trackLocalAudio, err := webrtc.NewTrackLocalStaticRTP(audioCodecCapability, newAudioID, "99")
+	addTrack(&pcState, trackLocalAudio, false)
+	for i := 0; i < numberOfTiles; i++ {
+		for j := 0; j < numberOfQualities; j++ {
+			newID := fmt.Sprintf("video_%d_%d", clientID, i)
+			newStreamID := fmt.Sprintf("%d", i)
+			trackLocal, err := webrtc.NewTrackLocalStaticRTP(videoCodecCapability, newID, newStreamID)
+			if err != nil {
+				logger.ErrorClient(currentPCID, "websocketHandler", fmt.Sprintf("Failed to create a track with ID %s and StreamID %s", newID, newStreamID))
+				panic(err)
+			}
+			addQualityTrack(&pcState, trackLocal, j, newID)
+			if j == 0 {
+				addTrack(&pcState, trackLocal, false)
+			}
+		}
+	}
 	peerConnections = append(peerConnections, pcState)
 	listLock.Unlock()
 
@@ -527,10 +602,12 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 				logger.ErrorClient(pcState.ID, "OnTrack", fmt.Sprintf("Failed to create a track with ID %s and StreamID %s", t.ID(), t.StreamID()))
 				panic(err)
 			}
-			addTrack(&pcState, trackLocal)
+			addTrack(&pcState, trackLocal, true)
+			updateClientTrackState(trackLocal)
 			defer func() {
 				removeTrack(&pcState, trackLocal)
 			}()
+
 		} else {
 			clientID, err := strconv.Atoi(v[1])
 			if err != nil {
@@ -557,11 +634,9 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			addQualityTrack(&pcState, trackLocal, quality, newID)
 			if quality == 0 {
-				addTrack(&pcState, trackLocal)
-				defer func() {
-					removeTrack(&pcState, trackLocal)
-				}()
+				addTrack(&pcState, trackLocal, true)
 			}
+			updateClientTrackStateQuality(trackLocal, quality)
 		}
 		buf := make([]byte, 1500)
 		for {
