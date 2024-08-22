@@ -231,6 +231,7 @@ func main() {
 		if c == nil {
 			return
 		}
+
 		logger.Log("OnICECandidate", fmt.Sprintf("New candidate: %s, %s", c.Address, c.String()), LevelVerbose)
 		if !strings.HasPrefix(*sfuAddress, "193.190") || strings.HasPrefix(c.Address, "10.8.0") {
 			logger.Log("OnICECandidate", fmt.Sprintf("Accepted candidate: %s, %s", c.Address, c.String()), LevelVerbose)
@@ -257,8 +258,22 @@ func main() {
 		} else if s == webrtc.PeerConnectionStateConnected {
 			// TODO Combine both write operations into one loop
 			// Idk if the underlying socket is thread safe or not but having is an extra thread is probably unwarrented anyway
-
-			logger.Log("OnConnectionStateChange", "Connected to the SFU", LevelDefault)
+			statsReport := peerConnection.GetStats()
+			candidateDetails := make(map[string]*webrtc.ICECandidateStats)
+			var localCandidateId *string = nil
+			var remoteCandidateId *string = nil
+			for _, stats := range statsReport {
+				switch stats := stats.(type) {
+				case webrtc.ICECandidateStats:
+					candidateDetails[stats.ID] = &stats
+				case webrtc.ICECandidatePairStats:
+					if stats.Nominated && stats.State == webrtc.StatsICECandidatePairStateSucceeded {
+						localCandidateId = &stats.LocalCandidateID
+						remoteCandidateId = &stats.RemoteCandidateID
+					}
+				}
+			}
+			logger.Log("OnConnectionStateChange", fmt.Sprintf("Connected to the SFU using IP %s and SFU IP %s", (candidateDetails[*localCandidateId]).IP, (candidateDetails[*remoteCandidateId]).IP), LevelDefault)
 
 			go func() {
 				// TODO: Potentially combine audio frames into single packet
@@ -296,6 +311,7 @@ func main() {
 								logger.Error("[SEND]", fmt.Sprintf("Failed to write incoming frame for tile %d and quality %d (ignoring for now)", tileNr, quality))
 								continue
 							}
+
 							if enableDebug {
 								if cc%100 == 0 {
 									logger.Log("[SEND]", fmt.Sprintf("Video frame %d belonging to tile %d and quality %d", cc, tileNr, quality), LevelDebug)
