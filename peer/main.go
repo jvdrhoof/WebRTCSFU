@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -32,6 +33,11 @@ var logger *Logger
 var proxyConn *ProxyConnection
 var clientID *int
 var enableDebug bool
+
+// Filter for IP addresses on the Virtual Wall
+func VirtualWallFilter(addr net.IP) bool {
+	return strings.HasPrefix(addr.String(), "10.8.0")
+}
 
 func main() {
 	sfuAddress := flag.String("sfu", "localhost:8080", "SFU address")
@@ -69,6 +75,8 @@ func main() {
 	}
 
 	settingEngine := webrtc.SettingEngine{}
+	settingEngine.SetIPFilter(VirtualWallFilter)
+
 	settingEngine.SetSCTPMaxReceiveBufferSize(16 * 1024 * 1024)
 	// TODO: When to use custom cipher suites?
 	// settingEngine.SetDTLSCustomerCipherSuites()
@@ -233,7 +241,7 @@ func main() {
 		}
 		logger.Log("OnICECandidate", fmt.Sprintf("New candidate: %s, %s", c.Address, c.String()), LevelVerbose)
 		if !strings.HasPrefix(*sfuAddress, "193.190") || strings.HasPrefix(c.Address, "10.8.0") {
-			logger.Log("OnICECandidate", fmt.Sprintf("Accepted candidate: %s, %s", c.Address, c.String()), LevelVerbose)
+			logger.Log("OnICECandidate", fmt.Sprintf("VALID candidate: %s, %s", c.Address, c.String()), LevelVerbose)
 			candidatesMux.Lock()
 			desc := peerConnection.RemoteDescription()
 			if desc == nil {
@@ -244,7 +252,7 @@ func main() {
 			}
 			candidatesMux.Unlock()
 		} else {
-			logger.Log("OnICECandidate", fmt.Sprintf("Using WebRTC through the UGent Virtual Wall requires VPN-connected clients in the 10.8.0.0/24 address range, ignoring candidate: %s, %s", c.Address, c.String()), LevelVerbose)
+			logger.Log("OnICECandidate", fmt.Sprintf("IGNORED candidate: %s, %s", c.Address, c.String()), LevelVerbose)
 		}
 	})
 
