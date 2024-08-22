@@ -582,7 +582,22 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 			logger.LogClient(pcState.ID, "OnConnectionStateChange", "Peer connection closed", LevelVerbose)
 			signalPeerConnections()
 		case webrtc.PeerConnectionStateConnected:
-			logger.LogClient(pcState.ID, "OnConnectionStateChange", "Peer connected", LevelVerbose)
+			statsReport := peerConnection.GetStats()
+			candidateDetails := make(map[string]*webrtc.ICECandidateStats)
+			var localCandidateId *string = nil
+			var remoteCandidateId *string = nil
+			for _, stats := range statsReport {
+				switch stats := stats.(type) {
+				case webrtc.ICECandidateStats:
+					candidateDetails[stats.ID] = &stats
+				case webrtc.ICECandidatePairStats:
+					if stats.Nominated && stats.State == webrtc.StatsICECandidatePairStateSucceeded {
+						localCandidateId = &stats.LocalCandidateID
+						remoteCandidateId = &stats.RemoteCandidateID
+					}
+				}
+			}
+			logger.LogClient(pcState.ID, "OnConnectionStateChange", fmt.Sprintf("Peer connected using SFU IP %s and peer IP %s", (candidateDetails[*localCandidateId]).IP, (candidateDetails[*remoteCandidateId]).IP), LevelVerbose)
 		}
 	})
 
