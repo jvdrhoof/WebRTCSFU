@@ -225,7 +225,7 @@ func main() {
 	//estimator := <-estimatorChan
 
 	// Create custom websocket handler on SFU address
-	wsHandler := NewWSHandler(*sfuAddress, "/websocket", *nTiles, *nQualities)
+	wsHandler := NewWSHandler(*sfuAddress, "/websocket", *nTiles, *nQualities, *clientID)
 
 	peerConnection.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
