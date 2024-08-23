@@ -692,6 +692,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		case 4: // candidate
+			logger.LogClient(pcState.ID, "websocketHandler", fmt.Sprintf("Message: %s", message), LevelVerbose)
 			desc := peerConnection.RemoteDescription()
 			if desc == nil {
 				pcState.pendingCandidatesString = append(pcState.pendingCandidatesString, message)
