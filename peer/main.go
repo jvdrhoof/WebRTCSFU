@@ -36,7 +36,7 @@ var enableDebug bool
 
 // Filter for IP addresses on the Virtual Wall
 func VirtualWallFilter(addr net.IP) bool {
-	return strings.HasPrefix(addr.String(), "10.8.0")
+	return strings.HasPrefix(addr.String(), "10.8.")
 }
 
 func main() {
@@ -234,6 +234,7 @@ func main() {
 
 	// Create custom websocket handler on SFU address
 	wsHandler := NewWSHandler(*sfuAddress, "/websocket", *nTiles, *nQualities, *clientID)
+	proxyConn.ws_handler = wsHandler
 
 	peerConnection.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
@@ -241,7 +242,7 @@ func main() {
 		}
 
 		logger.Log("OnICECandidate", fmt.Sprintf("New candidate: %s, %s", c.Address, c.String()), LevelVerbose)
-		if !strings.HasPrefix(*sfuAddress, "193.190") || strings.HasPrefix(c.Address, "10.8.0") {
+		if !strings.HasPrefix(*sfuAddress, "193.190") || strings.HasPrefix(c.Address, "10.8.") {
 			logger.Log("OnICECandidate", fmt.Sprintf("VALID candidate: %s, %s", c.Address, c.String()), LevelVerbose)
 			candidatesMux.Lock()
 			desc := peerConnection.RemoteDescription()
@@ -321,12 +322,17 @@ func main() {
 							}
 
 							if enableDebug {
-								if cc%100 == 0 {
-									logger.Log("[SEND]", fmt.Sprintf("Video frame %d belonging to tile %d and quality %d", cc, tileNr, quality), LevelDebug)
+								if cc%10 == 0 {
+									logger.Log("[SEND]", fmt.Sprintf("Video frame %d belonging to tile %d and quality %d at time %d", cc, tileNr, quality, time.Now().UnixMilli()), LevelDebug)
 								}
 								time.Sleep(30 * time.Millisecond)
-								cc++
 							}
+
+							if cc%100 == 0 {
+								logger.Log("[SEND]", fmt.Sprintf("Video frame %d belonging to tile %d and quality %d at time %d", cc, tileNr, quality, time.Now().UnixMilli()), LevelVerbose)
+							}
+
+							cc++
 						}
 					}(t, q)
 				}
@@ -405,11 +411,11 @@ func main() {
 
 				frames[p.FrameNr] += p.SeqLen
 				if frames[p.FrameNr] == p.FrameLen && p.FrameNr%100 == 0 {
-					logger.Log("[RECV]", fmt.Sprintf("Received video frame %d from client %d and tile %d at quality %d with length %d", p.FrameNr, p.ClientNr, p.TileNr, p.Quality, p.FrameLen), LevelVerbose)
+					logger.Log("[RECV]", fmt.Sprintf("Received video frame %d from client %d and tile %d at quality %d with length %d at time %d", p.FrameNr, p.ClientNr, p.TileNr, p.Quality, p.FrameLen, time.Now().UnixMilli()), LevelVerbose)
 					// TODO: Check if this is correct (it shouldn't be)
 					frames[p.FrameNr] = 0
 				} else if frames[p.FrameNr] == p.FrameLen {
-					logger.Log("[RECV]", fmt.Sprintf("Received video frame %d from client %d and tile %d at quality %d with length %d", p.FrameNr, p.ClientNr, p.TileNr, p.Quality, p.FrameLen), LevelDebug)
+					logger.Log("[RECV]", fmt.Sprintf("Received video frame %d from client %d and tile %d at quality %d with length %d at time %d", p.FrameNr, p.ClientNr, p.TileNr, p.Quality, p.FrameLen, time.Now().UnixMilli()), LevelDebug)
 				}
 			} else {
 				// Create a buffer from the byte array, skipping the first WebRTCHeaderSize bytes
@@ -452,7 +458,8 @@ func main() {
 			state = Hello
 			logger.Log("handleMessageCallback", fmt.Sprintf("Current state: %d", state), LevelVerbose)
 		case 2: // offer
-			logger.Log("handleMessageCallback", fmt.Sprintf("Received an offer: %s", wsPacket.Message), LevelVerbose)
+			// logger.Log("handleMessageCallback", fmt.Sprintf("Received an offer: %s", wsPacket.Message), LevelVerbose)
+			logger.Log("handleMessageCallback", "Received an offer", LevelVerbose)
 			offer := webrtc.SessionDescription{}
 			err := json.Unmarshal([]byte(wsPacket.Message), &offer)
 			if err != nil {
@@ -477,7 +484,8 @@ func main() {
 			state = Offer
 			logger.Log("handleMessageCallback", fmt.Sprintf("Current state: %d", state), LevelVerbose)
 		case 3: // answer
-			logger.Log("handleMessageCallback", fmt.Sprintf("Received an answer: %s", wsPacket.Message), LevelVerbose)
+			// logger.Log("handleMessageCallback", fmt.Sprintf("Received an answer: %s", wsPacket.Message), LevelVerbose)
+			logger.Log("handleMessageCallback", "Received an answer", LevelVerbose)
 			answer := webrtc.SessionDescription{}
 			err := json.Unmarshal([]byte(wsPacket.Message), &answer)
 			if err != nil {

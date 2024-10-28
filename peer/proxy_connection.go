@@ -75,6 +75,8 @@ type ProxyConnection struct {
 
 	cond_audio *sync.Cond
 	mtx_audio  sync.Mutex
+
+	ws_handler *WebsocketHandler
 }
 
 type SetupCallback func(int)
@@ -86,6 +88,7 @@ func NewProxyConnection() *ProxyConnection {
 		sync.Mutex{},                                // Send mutex
 		make(map[VideoKey]*sync.Cond), sync.Mutex{}, // Video mutex
 		nil, sync.Mutex{}, // Audio mutex
+		nil,
 	}
 }
 
@@ -238,6 +241,15 @@ func (pc *ProxyConnection) StartListening(nTiles int, nQualities int) {
 					pc.cond_audio.Broadcast()
 				}
 				pc.mtx_audio.Unlock()
+			} else if ptype == ControlPacketType {
+				logger.Log("StartListening", string(buffer[TypeHeaderSize:]), 0)
+				if pc.ws_handler != nil {
+					pc.ws_handler.SendMessage(WebsocketPacket{
+						0,
+						7,
+						string(buffer[TypeHeaderSize:]),
+					})
+				}
 			}
 		}
 	}()
