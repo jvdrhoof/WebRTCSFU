@@ -64,6 +64,7 @@ func main() {
 	maxNumberOfTiles = flag.Int("t", 1, "Number of tiles")
 	maxNumberOfQualities = flag.Int("q", 1, "Number of qualities")
 	logLevel := flag.Int("l", LevelDefault, "Log level (0: default, 1: verbose, 2: debug)")
+	restrictSFUAddress = flag.String("r", "", "Restrict SFU IP address") // "193.190" used at UGent
 	flag.Parse()
 
 	logger = NewLogger(*logLevel)
@@ -393,8 +394,8 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	pcID++
 	listLock.Unlock()
 
-	// Filter for Virtual Wall
-	settingEngine.SetIPFilter(VirtualWallFilter)
+	// Filter for Virtual Wall (disabled for now)
+	// settingEngine.SetIPFilter(VirtualWallFilter)
 
 	logger.Log("websocketHandler", fmt.Sprintf("New connection received for address %s, assigning client ID #%d", r.RemoteAddr, currentPCID), LevelVerbose)
 	logger.LogClient(currentPCID, "websocketHandler", "Websocket handler started", LevelDebug)
@@ -557,7 +558,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		logger.LogClient(pcState.ID, "OnICECandidate", fmt.Sprintf("New candidate with address %s and port %d", i.Address, i.Port), LevelVerbose)
-		if strings.Contains(i.Address, "193.190") {
+		if strings.Contains(i.Address, *restrictSFUAddress) {
 			logger.LogClient(pcState.ID, "OnICECandidate", fmt.Sprintf("Forwarding valid candidate with address %s and port %d", i.Address, i.Port), LevelVerbose)
 			payload := []byte(i.ToJSON().Candidate)
 			s := fmt.Sprintf("%d@%d@%s", 0, 4, string(payload))
