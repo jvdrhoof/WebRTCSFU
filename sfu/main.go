@@ -37,6 +37,7 @@ var (
 	wsLock               sync.RWMutex
 	maxNumberOfTiles     *int
 	maxNumberOfQualities *int
+	restrictSFUAddress   *string
 	pcID                 = 0
 )
 
