@@ -67,7 +67,7 @@ func main() {
 	maxNumberOfQualities = flag.Int("q", 1, "Number of qualities")
 	logLevel := flag.Int("l", LevelDefault, "Log level (0: default, 1: verbose, 2: debug)")
 	restrictSFUAddress = flag.String("r", "", "Restrict SFU IP address") // "193.190" used at UGent
-	useSTUN = flag.Bool("s", false, "Use STUN server (use this if you have problems with ICE+NAT)")
+	useSTUN = flag.Bool("s", false, "Use STUN server (use this if you have problems with ICE+NAT, i.e. WebSocket works but WebRTC connection doesn't)")
 	portRange := flag.String("p", "", "The range of ports that can be used during ICE gathering") // "193.190" used at UGent
 	flag.Parse()
 
