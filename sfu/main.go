@@ -38,6 +38,7 @@ var (
 	maxNumberOfTiles     *int
 	maxNumberOfQualities *int
 	restrictSFUAddress   *string
+	useSTUN              *bool
 	pcID                 = 0
 )
 
@@ -66,14 +67,24 @@ func main() {
 	maxNumberOfQualities = flag.Int("q", 1, "Number of qualities")
 	logLevel := flag.Int("l", LevelDefault, "Log level (0: default, 1: verbose, 2: debug)")
 	restrictSFUAddress = flag.String("r", "", "Restrict SFU IP address") // "193.190" used at UGent
+	useSTUN = flag.Bool("s", false, "Use STUN server (use this if you have problems with ICE+NAT)")
+	portRange := flag.String("p", "", "The range of ports that can be used during ICE gathering") // "193.190" used at UGent
 	flag.Parse()
 
 	logger = NewLogger(*logLevel)
 
 	logger.Log("main", fmt.Sprintf("Starting SFU with %d tiles per client and %d qualities per tile", *maxNumberOfTiles, *maxNumberOfQualities), LevelDefault)
 
-	settingEngine := webrtc.SettingEngine{}
+	settingEngine = webrtc.SettingEngine{}
 	settingEngine.SetSCTPMaxReceiveBufferSize(16 * 1024 * 1024)
+	ports := strings.Split(*portRange, ":")
+	if len(ports) == 2 {
+		minPort, err1 := strconv.Atoi(ports[0])
+		maxPort, err2 := strconv.Atoi(ports[1])
+		if err1 == nil && err2 == nil {
+			settingEngine.SetEphemeralUDPPortRange(uint16(minPort), uint16(maxPort))
+		}
+	}
 
 	// Init other state
 	log.SetFlags(0)
@@ -494,8 +505,18 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	if err = webrtc.RegisterDefaultInterceptors(mediaEngine, interceptorRegistry); err != nil {
 		panic(err)
 	}
-
-	peerConnection, err := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine), webrtc.WithMediaEngine(mediaEngine), webrtc.WithInterceptorRegistry(interceptorRegistry)).NewPeerConnection(webrtc.Configuration{})
+	webrtcConfig := webrtc.Configuration{}
+	if *useSTUN {
+		logger.LogClient(currentPCID, "websocketHandler", "Using STUN server", LevelVerbose)
+		webrtcConfig = webrtc.Configuration{
+			ICEServers: []webrtc.ICEServer{
+				{
+					URLs: []string{"stun:stun.l.google.com:19302"},
+				},
+			},
+		}
+	}
+	peerConnection, err := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine), webrtc.WithMediaEngine(mediaEngine), webrtc.WithInterceptorRegistry(interceptorRegistry)).NewPeerConnection(webrtcConfig)
 	if err != nil {
 		panic(err)
 	}
